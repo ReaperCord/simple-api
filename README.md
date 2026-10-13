@@ -81,7 +81,7 @@ simple-api/
 ├── .github/workflows/ # ci.yml, deploy.yml, infra.yml
 ├── docs/              # ADRs, arquitetura, autoscaling, DR e benchmark local
 ├── tests/load/        # script k6, driver e resultados do benchmark LOCAL
-├── tools/             # residual-check.sh (varredura de resíduos após destroy)
+├── tools/             # residual-check.sh (varredura de resíduos após destroy) e console-utf8.ps1 (UTF-8 no console do Windows)
 ├── .kiro/steering/    # decisões e regras do projeto (fonte das decisões travadas)
 ├── AGENTS.md          # contrato de trabalho para agentes de IA
 └── docker-compose.yml # ambiente local: Postgres 16 e a API
@@ -191,6 +191,10 @@ O `terraform plan` não faz parte desta validação: os data sources `aws_availa
 | actionlint | workflows | `actionlint` |
 
 Exceções do Trivy ficam em [`infrastructure/.trivyignore`](infrastructure/.trivyignore), cada uma com justificativa e data. A exceção do Gitleaks está em [`.gitleaks.toml`](.gitleaks.toml).
+
+### Console do Windows (UTF-8)
+
+No Windows PowerShell 5.1 o console usa a página de código OEM, então a tabela do Trivy (bordas Unicode) aparece como `Ôö£ÔöÇ` e CLIs Python como o aws cli podem falhar com `'charmap' codec can't encode character`. Antes de rodar essas ferramentas, faça `. .\tools\console-utf8.ps1`: ele ajusta só a sessão atual (UTF-8 no console e `PYTHONUTF8=1`), sem tocar no perfil do usuário. [FATO: [`tools/console-utf8.ps1`](tools/console-utf8.ps1)]
 
 ## Como o pipeline funciona
 
