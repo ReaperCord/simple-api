@@ -350,6 +350,9 @@ data "aws_iam_policy_document" "infra" {
       "rds:DeleteDBSubnetGroup",    # destroy do subnet group
       "rds:AddTagsToResource",      # tags
       "rds:RemoveTagsFromResource", # tags
+      "rds:ListTagsForResource",    # refresh de tags da instancia e do subnet group no apply
+      "rds:DescribeDBInstances",    # refresh da instancia
+      "rds:DescribeDBSubnetGroups", # refresh do subnet group
     ]
 
     condition {
@@ -462,17 +465,22 @@ data "aws_iam_policy_document" "infra" {
   }
 
   # O namespace privado do Cloud Map cria e remove uma zona hospedada privada (Route 53 e global,
-  # sem aws:RequestedRegion).
+  # sem aws:RequestedRegion). Resource "*": CreateHostedZone, GetChange e as leituras de zona do
+  # Route 53 NAO suportam permissao por recurso e exigem "*" (doc Route 53: "This action does not
+  # support resource-level permissions. Policies granting access must specify * in the resource").
+  # A zona ainda nao existe no momento do CreateHostedZone, entao nao ha ARN a restringir.
   statement {
     sid       = "CloudMapHostedZone"
     effect    = "Allow"
-    resources = ["arn:${local.partition}:route53:::hostedzone/*", "arn:${local.partition}:route53:::change/*"]
+    resources = ["*"]
     actions = [
-      "route53:CreateHostedZone",    # zona privada do namespace
-      "route53:DeleteHostedZone",    # destroy da zona
-      "route53:GetHostedZone",       # leitura da zona
-      "route53:GetChange",           # espera a propagacao
-      "route53:ListTagsForResource", # tags da zona
+      "route53:CreateHostedZone",      # zona privada do namespace
+      "route53:DeleteHostedZone",      # destroy da zona
+      "route53:GetHostedZone",         # leitura da zona
+      "route53:GetChange",             # espera a propagacao
+      "route53:ListHostedZonesByName", # exigida pelo CreatePrivateDnsNamespace (doc Cloud Map)
+      "route53:ListTagsForResource",   # tags da zona
+      "route53:ChangeTagsForResource", # tags da zona no create/update
     ]
   }
 
@@ -480,11 +488,13 @@ data "aws_iam_policy_document" "infra" {
     sid    = "ApiGateway"
     effect = "Allow"
     actions = [
-      "apigateway:GET",    # leitura no refresh
-      "apigateway:POST",   # cria API, VPC link, integracao, rota e estagio
-      "apigateway:PUT",    # tags
-      "apigateway:PATCH",  # update de API, integracao, rota e estagio
-      "apigateway:DELETE", # destroy
+      "apigateway:GET",           # leitura no refresh
+      "apigateway:POST",          # cria API, VPC link, integracao, rota e estagio
+      "apigateway:PUT",           # update
+      "apigateway:PATCH",         # update de API, integracao, rota e estagio
+      "apigateway:DELETE",        # destroy
+      "apigateway:TagResource",   # tags do VPC link e do estagio (acao propria, nao coberta por PUT)
+      "apigateway:UntagResource", # remocao de tags no update/destroy
     ]
     resources = [
       "${local.apigateway_arn}/apis",
