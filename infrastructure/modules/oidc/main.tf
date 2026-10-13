@@ -118,6 +118,7 @@ data "aws_iam_policy_document" "plan" {
       "ecs:Describe*",                               # cluster, service e task definition
       "ecs:List*",                                   # listagens usadas no refresh do ECS
       "ecr:DescribeRepositories",                    # data.aws_ecr_repository
+      "ecr:DescribeImages",                          # data.aws_ecr_repository: o provider aws 6.x tambem chama DescribeImages (mesmo gap da gha-infra; plan do ci.yml falhava com AccessDenied)
       "ecr:ListTagsForResource",                     # tags do repositorio no data source
       "servicediscovery:Get*",                       # namespace e servico do Cloud Map
       "servicediscovery:List*",                      # tags e listagens do Cloud Map
