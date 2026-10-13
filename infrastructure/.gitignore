@@ -1,6 +1,8 @@
 # Terraform
 .terraform/
-.terraform.lock.hcl
+# .terraform.lock.hcl FICA versionado (reprodutibilidade dos providers; o CI usa -lockfile=readonly)
+*.tfplan
+tfplan
 *.tfstate
 *.tfstate.*
 crash.log
