@@ -1,0 +1,340 @@
+# CI de pull request (06-cicd.md). Nenhum job aplica terraform; so o job "plan" assume role AWS (gha-plan, OIDC)
+# e so para PR do mesmo repositorio (fork nunca recebe id-token nem variaveis de role).
+name: ci
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Versao do Terraform = a usada no desenvolvimento local; o lockfile fixa o provider aws em 6.68.0.
+  TERRAFORM_VERSION: "1.16.5"
+
+jobs:
+  app:
+    name: app (testes, lint, audit)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: application
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Node 24
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: application/package-lock.json
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: Testes
+        run: npm test
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Audit de dependencias de producao (HIGH+)
+        run: npm audit --omit=dev --audit-level=high
+
+  sast:
+    name: sast (semgrep)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Rulesets p/javascript e p/nodejs conferidos no Registry do Semgrep (https://semgrep.dev/c/p/<nome> devolve
+      # as regras; um nome inexistente devolve 404). Imagem oficial fixada por digest (tag 1.180.0).
+      - name: Semgrep (bloqueia severidade ERROR)
+        run: |
+          docker run --rm -v "${GITHUB_WORKSPACE}:/src" -w /src \
+            semgrep/semgrep@sha256:529ee8a277ec8adc5b534d7c74eea0a47e9de21d62852b6ba7ac6ba9566845c3 \
+            semgrep scan --config p/javascript --config p/nodejs --severity ERROR --error --metrics=off application
+
+  dockerfile:
+    name: dockerfile (hadolint, build, trivy image)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      HADOLINT_VERSION: v2.15.1
+      # SHA-256 de hadolint-linux-x86_64, conferido contra checksums.sha256 da release v2.15.1.
+      HADOLINT_SHA256: c7187db94eeeeca956519a6af171adc31453941a1e777961f6e680f697c8c507
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Hadolint (binario com SHA-256 conferido)
+        run: |
+          set -euo pipefail
+          cd "${RUNNER_TEMP}"
+          curl -fsSL -o hadolint "https://github.com/hadolint/hadolint/releases/download/${HADOLINT_VERSION}/hadolint-linux-x86_64"
+          echo "${HADOLINT_SHA256}  hadolint" | sha256sum --check --strict -
+          chmod 0755 hadolint
+          cd "${GITHUB_WORKSPACE}"
+          "${RUNNER_TEMP}/hadolint" application/Dockerfile
+
+      - name: QEMU (build arm64)
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+
+      - name: Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      # push: false. O build exercita o ADD --checksum do bundle RDS; o primeiro build no runner conta como
+      # segunda medicao independente do hash (a primeira foi local, em 2026-10-12).
+      - name: Build amd64 (carrega no daemon para o scan)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ./application
+          file: ./application/Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: simple-api:ci
+
+      - name: Build arm64 (plataforma de producao, sem push)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ./application
+          file: ./application/Dockerfile
+          platforms: linux/arm64
+          push: false
+
+      - name: Trivy image (HIGH/CRITICAL com correcao disponivel)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: simple-api:ci
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          format: table
+
+  iac:
+    name: iac (fmt, validate, test, tflint, trivy config)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      TFLINT_VERSION: v0.64.0
+      # SHA-256 de tflint_linux_amd64.zip, conferido contra checksums.txt da release v0.64.0.
+      TFLINT_SHA256: cca9d13e2e1d7a2c627af60ff899a3c9b74212899416aeb96ec764d2ef954537
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: terraform fmt -check
+        run: terraform fmt -check -recursive -diff infrastructure
+
+      # Roots usam o lockfile versionado em modo readonly. Modulos nao tem lockfile proprio (Decisao 4):
+      # recebem uma copia do lockfile do root para validar com o mesmo provider (aws 6.68.0).
+      - name: terraform init (-backend=false) e validate por root e modulo
+        run: |
+          set -euo pipefail
+          for d in infrastructure infrastructure/bootstrap; do
+            echo "::group::validate ${d}"
+            terraform -chdir="${d}" init -backend=false -input=false -lockfile=readonly
+            terraform -chdir="${d}" validate
+            echo "::endgroup::"
+          done
+          while IFS= read -r d; do
+            echo "::group::validate ${d}"
+            cp infrastructure/.terraform.lock.hcl "${d}/.terraform.lock.hcl"
+            terraform -chdir="${d}" init -backend=false -input=false -lockfile=readonly
+            terraform -chdir="${d}" validate
+            echo "::endgroup::"
+          done < <(find infrastructure/modules -name '*.tf' -not -path '*/.terraform/*' -not -path '*/tests/*' -printf '%h\n' | sort -u)
+
+      - name: terraform test (modulos com .tftest.hcl)
+        run: |
+          set -euo pipefail
+          while IFS= read -r d; do
+            echo "::group::test ${d}"
+            terraform -chdir="${d}" test
+            echo "::endgroup::"
+          done < <(find infrastructure/modules -name '*.tftest.hcl' -not -path '*/.terraform/*' -print0 | xargs -0 -n1 dirname | sed -E 's#/tests$##' | sort -u)
+
+      # Prova de que nat-gateway, aws_lb* e private.json ficam fora da composicao do root.
+      - name: Composicao do root sem nat-gateway, aws_lb* e private.json
+        run: |
+          set -euo pipefail
+          # 'terraform graph' exige backend inicializado: usa uma copia do root com backend local (override), sem tocar no S3.
+          graph_dir="${RUNNER_TEMP}/root-graph"
+          mkdir -p "${graph_dir}"
+          tar --exclude=.terraform -cf - -C infrastructure . | tar -xf - -C "${graph_dir}"
+          printf 'terraform {\n  backend "local" {}\n}\n' > "${graph_dir}/backend_override.tf"
+          terraform -chdir="${graph_dir}" init -input=false -lockfile=readonly > /dev/null
+          terraform -chdir="${graph_dir}" graph > "${RUNNER_TEMP}/root-graph.dot"
+          if grep -nE 'aws_nat_gateway|aws_lb|aws_alb' "${RUNNER_TEMP}/root-graph.dot"; then
+            echo "::error::recurso proibido na composicao do root"
+            exit 1
+          fi
+          if grep -nE '"Source": ?"[^"]*(nat-gateway|network/alb|target-group|listener)' "${graph_dir}/.terraform/modules/modules.json"; then
+            echo "::error::modulo proibido instanciado no root"
+            exit 1
+          fi
+          # linhas de comentario podem citar o arquivo (o root documenta que ele NAO e usado)
+          if grep -nE 'private\.json' infrastructure/main.tf | grep -vE '^[0-9]+:[[:space:]]*#'; then
+            echo "::error::private.json referenciado no root"
+            exit 1
+          fi
+
+      - name: TFLint (binario com SHA-256 conferido)
+        run: |
+          set -euo pipefail
+          cd "${RUNNER_TEMP}"
+          curl -fsSL -o tflint.zip "https://github.com/terraform-linters/tflint/releases/download/${TFLINT_VERSION}/tflint_linux_amd64.zip"
+          echo "${TFLINT_SHA256}  tflint.zip" | sha256sum --check --strict -
+          unzip -q -o tflint.zip -d tflint-bin
+          echo "${RUNNER_TEMP}/tflint-bin" >> "${GITHUB_PATH}"
+
+      - name: tflint --init e --recursive
+        env:
+          # evita o rate limit anonimo da API do GitHub ao baixar o plugin aws
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tflint --init --config "${GITHUB_WORKSPACE}/infrastructure/.tflint.hcl"
+          tflint --recursive --chdir infrastructure --config "${GITHUB_WORKSPACE}/infrastructure/.tflint.hcl" --minimum-failure-severity=error
+
+      - name: Trivy config (HIGH+; excecoes em infrastructure/.trivyignore)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: config
+          scan-ref: infrastructure
+          tf-vars: infrastructure/environments/dev.tfvars
+          trivyignores: infrastructure/.trivyignore
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          format: table
+
+  secrets:
+    name: secrets (gitleaks)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      GITLEAKS_VERSION: 8.30.1
+      # SHA-256 de gitleaks_8.30.1_linux_x64.tar.gz, conferido contra gitleaks_8.30.1_checksums.txt.
+      GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+    steps:
+      - name: Checkout (historico completo)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Gitleaks (binario com SHA-256 conferido)
+        run: |
+          set -euo pipefail
+          cd "${RUNNER_TEMP}"
+          curl -fsSL -o gitleaks.tar.gz "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  gitleaks.tar.gz" | sha256sum --check --strict -
+          mkdir gitleaks-bin
+          tar -xzf gitleaks.tar.gz -C gitleaks-bin gitleaks
+          echo "${RUNNER_TEMP}/gitleaks-bin" >> "${GITHUB_PATH}"
+
+      - name: gitleaks git (historico)
+        run: gitleaks git . --no-banner --redact
+
+      - name: gitleaks dir (arquivos)
+        run: gitleaks dir . --no-banner --redact
+
+  workflows:
+    name: workflows (actionlint)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      ACTIONLINT_VERSION: 1.7.12
+      # SHA-256 de actionlint_1.7.12_linux_amd64.tar.gz, conferido contra actionlint_1.7.12_checksums.txt.
+      ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: actionlint (binario com SHA-256 conferido)
+        run: |
+          set -euo pipefail
+          cd "${RUNNER_TEMP}"
+          curl -fsSL -o actionlint.tar.gz "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          echo "${ACTIONLINT_SHA256}  actionlint.tar.gz" | sha256sum --check --strict -
+          mkdir actionlint-bin
+          tar -xzf actionlint.tar.gz -C actionlint-bin actionlint
+          cd "${GITHUB_WORKSPACE}"
+          "${RUNNER_TEMP}/actionlint-bin/actionlint" -color
+
+  plan:
+    name: plan (terraform plan com state em S3)
+    # Sem fork (nunca recebe id-token) e so quando a variavel da role existir.
+    if: ${{ github.event.pull_request.head.repo.full_name == github.repository && vars.AWS_PLAN_ROLE_ARN != '' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write # unico job que assume role (gha-plan, sub = pull_request)
+    env:
+      TF_IN_AUTOMATION: "true"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Credenciais AWS via OIDC (gha-plan)
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_PLAN_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: terraform init (backend S3)
+        working-directory: infrastructure
+        env:
+          TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+          TF_STATE_KEY: ${{ vars.TF_STATE_KEY }}
+          AWS_REGION_VAR: ${{ vars.AWS_REGION }}
+        run: |
+          terraform init -input=false -lockfile=readonly \
+            -backend-config="bucket=${TF_STATE_BUCKET}" \
+            -backend-config="key=${TF_STATE_KEY}" \
+            -backend-config="region=${AWS_REGION_VAR}"
+
+      # A tag da imagem nao precisa existir no ECR para o plan (so compoe a referencia da imagem).
+      - name: terraform plan (-lock=true)
+        working-directory: infrastructure
+        env:
+          IMAGE_TAG: ${{ github.event.pull_request.head.sha }}
+        run: |
+          terraform plan -lock=true -input=false \
+            -var-file=environments/dev.tfvars \
+            -var "image_tag=${IMAGE_TAG}"

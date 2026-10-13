@@ -1,0 +1,101 @@
+# Plan/apply/destroy da stack principal (root infrastructure/). Somente manual.
+# Role gha-infra por OIDC; environment "infra" com aprovacao obrigatoria (e o gate de apply e destroy).
+# Ordem do primeiro uso: bootstrap (local) -> deploy.yml com only_build=true -> este workflow com a tag da imagem.
+name: infra
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "plan, apply ou destroy"
+        type: choice
+        options:
+          - plan
+          - apply
+          - destroy
+        default: plan
+      image_tag:
+        description: "Tag da imagem ja publicada no ECR (SHA do commit; nunca latest)"
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  id-token: write # assume gha-infra; este workflow tem um unico job, que assume a role
+
+concurrency:
+  group: infra
+  cancel-in-progress: false
+
+jobs:
+  terraform:
+    runs-on: ubuntu-24.04
+    environment: infra
+    timeout-minutes: 90
+    env:
+      TF_IN_AUTOMATION: "true"
+      TERRAFORM_VERSION: "1.16.5"
+    defaults:
+      run:
+        working-directory: infrastructure
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Validar entradas
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${IMAGE_TAG}" =~ ^[A-Za-z0-9_.-]{1,128}$ || "${IMAGE_TAG}" == "latest" ]]; then
+            echo "::error::image_tag invalida (use a tag SHA publicada pelo deploy.yml, nunca latest)."
+            exit 1
+          fi
+
+      - name: Credenciais AWS via OIDC (gha-infra)
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_INFRA_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: terraform init (backend S3)
+        env:
+          TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+          TF_STATE_KEY: ${{ vars.TF_STATE_KEY }}
+          STATE_REGION: ${{ vars.AWS_REGION }}
+        run: |
+          terraform init -input=false -lockfile=readonly \
+            -backend-config="bucket=${TF_STATE_BUCKET}" \
+            -backend-config="key=${TF_STATE_KEY}" \
+            -backend-config="region=${STATE_REGION}"
+
+      - name: terraform plan (salva o plano)
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
+          ACTION: ${{ inputs.action }}
+        run: |
+          set -euo pipefail
+          if [[ "${ACTION}" == "destroy" ]]; then
+            terraform plan -destroy -input=false -var-file=environments/dev.tfvars -var "image_tag=${IMAGE_TAG}" -out=tfplan
+          else
+            terraform plan -input=false -var-file=environments/dev.tfvars -var "image_tag=${IMAGE_TAG}" -out=tfplan
+          fi
+
+      # Sem -auto-approve: o gate e a aprovacao do environment "infra". O apply usa o arquivo salvo acima.
+      - name: terraform apply do plano salvo (apply e destroy)
+        if: ${{ inputs.action == 'apply' || inputs.action == 'destroy' }}
+        run: terraform apply -input=false tfplan
+
+      - name: Lembrete pos-destroy
+        if: ${{ inputs.action == 'destroy' }}
+        run: |
+          echo "::notice::Destroy concluido. Rode tools/residual-check.sh (somente leitura) para listar recursos residuais que ainda cobram."
+          echo "Rode tools/residual-check.sh apos o destroy." >> "${GITHUB_STEP_SUMMARY}"

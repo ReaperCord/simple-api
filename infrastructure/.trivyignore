@@ -1,0 +1,28 @@
+# Excecoes conscientes do 'trivy config' (HIGH/CRITICAL). Regra de 03-devsecops.md: toda entrada leva
+# ID, justificativa e data. IDs sao globais (o formato .trivyignore nao filtra por caminho): ao instanciar
+# o ALB ou criar outro bucket, revise estas entradas.
+# Uso a partir da raiz do repo (o Trivy so le .trivyignore do diretorio atual por padrao):
+#   trivy config infrastructure --ignorefile infrastructure/.trivyignore --severity HIGH,CRITICAL --exit-code 1
+
+# [2026-10-13] AWS-0132 (HIGH): bucket de state do root bootstrap usa SSE-S3 (AES256), nao CMK.
+# Justificativa: decisao do plano e de FinOps (chave KMS gerenciada pelo cliente tem custo mensal) para um
+# laboratorio com um unico bucket de state. Compensacoes no mesmo arquivo: versionamento e bloqueio de acesso
+# publico. Local: infrastructure/bootstrap/main.tf (aws_s3_bucket_server_side_encryption_configuration.state).
+AWS-0132
+
+# [2026-10-13] AWS-0164 (HIGH): subnet publica associa IP publico (map_public_ip_on_launch = true).
+# Justificativa: desenho consciente da trilha sem NAT e sem VPC endpoints: as tasks Fargate ficam nas subnets
+# publicas com IP publico para chegar ao ECR, Secrets Manager e CloudWatch Logs; o ingresso e fechado pelo
+# security group (so o VPC Link alcanca a porta da app). Aparece quando o Trivy recebe o tfvars:
+#   --tf-vars infrastructure/environments/dev.tfvars. Local: infrastructure/main.tf (module.public_subnets).
+AWS-0164
+
+# [2026-10-13] AWS-0052 (HIGH): ALB sem drop_invalid_header_fields.
+# Justificativa: infrastructure/modules/network/alb e legado do repo base e NAO e instanciado (decisao travada:
+# sem ALB na trilha ECS; 04-terraform.md proibe instanciar alb/target-group/listener). Modulo fora da trilha
+# nao e alterado nesta fase. Corrigir no codigo antes de qualquer uso futuro do modulo.
+AWS-0052
+
+# [2026-10-13] AWS-0053 (HIGH): ALB exposto a internet (internal = var.internal, avaliado como false).
+# Justificativa: mesmo modulo legado nao instanciado. Reavaliar antes de qualquer uso futuro do modulo.
+AWS-0053
