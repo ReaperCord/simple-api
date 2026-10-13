@@ -1,6 +1,14 @@
 variable "subnet_name" {
   description = "Lista com os nomes das subnets (ex: ['public-1a', 'public-1b'])"
   type        = list(string)
+
+  validation {
+    condition = (
+      length(var.subnet_name) == length(var.subnet_cidr) &&
+      length(var.subnet_name) == length(var.availability_zone)
+    )
+    error_message = "subnet_name, subnet_cidr e availability_zone precisam ter o mesmo tamanho (element() faria wrap-around em silencio)."
+  }
 }
 
 variable "subnet_cidr" {

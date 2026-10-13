@@ -24,6 +24,57 @@ Documente os problemas que encontrou e como os corrigiu. Isso faz parte da avali
 
 ---
 
+## Implementação atual (trilha ECS)
+
+A composição em `main.tf` segue a trilha decidida em `.kiro/steering/01-arquitetura-e-restricoes.md`: API Gateway HTTP API → VPC Link V2 → Cloud Map (registro SRV) → ECS Fargate ARM64 (0,5 vCPU / 1 GB) → RDS PostgreSQL privado. As seções abaixo descrevem como ela difere da "arquitetura alvo" do desafio e como operar.
+
+### Divergências conscientes
+
+A "arquitetura alvo" abaixo (ALB + NAT) é a do autor do desafio. A implementação diverge de propósito:
+
+| Tema | Arquitetura alvo do autor | Trilha atual |
+|---|---|---|
+| Entrada | Application Load Balancer público | API Gateway HTTP API com VPC Link V2 e Cloud Map (SRV) |
+| Saída das subnets privadas | NAT Gateway | Sem NAT: subnets privadas só com a rota local (RDS e VPC Link) |
+| Tasks ECS | Subnets privadas | Subnets públicas com IP público; o SG aceita só o SG do VPC Link |
+| Módulos `alb`, `target-group`, `listener`, `nat-gateway` | Instanciados | Mantidos no repositório e NÃO instanciados (alternativa futura) |
+| Regra de SG da task | Origem no ALB | Origem no SG do VPC Link, por chave simbólica (`sg_refs`) |
+
+Motivo: evitar o custo fixo do ALB e do NAT, conforme os guardrails de FinOps do projeto (`.kiro/steering/02-finops-guardrails.md`, que traz os preços com fonte). O ADR dessa decisão ainda não foi escrito (pendente).
+
+### Trade-off de `ignore_changes` e `skip_destroy`
+
+- O `aws_ecs_service` tem `lifecycle { ignore_changes = [task_definition, desired_count] }`. O Terraform cria a revisão inicial da task definition; o pipeline (`deploy.yml`) registra as seguintes e chama `UpdateService`. O autoscaling controla o `desired_count`.
+- Consequência: mudar variável de ambiente, CPU, memória ou `healthCheck` pelo Terraform NÃO chega ao service depois da criação. Só um deploy pelo pipeline aplica a mudança.
+- **Revise todo `terraform plan` que mostre `aws_ecs_service` "must be replaced"** antes de aprovar o apply: o `ignore_changes` não protege contra recriação por mudança de argumentos que forçam novo recurso.
+- A task definition tem `skip_destroy = true`: o Terraform não desregistra a revisão antiga ao substituí-la ou destruí-la, para o service não ficar apontando para uma revisão inativa durante um replace. Resíduo: após um `destroy` as revisões de task definition continuam registradas na conta (sem tasks em execução); remova-as à parte se quiser limpar.
+
+### Validação local (sem AWS, sem `plan`)
+
+```powershell
+terraform fmt -check -recursive infrastructure
+terraform -chdir=infrastructure/bootstrap init -backend=false -input=false -lockfile=readonly
+terraform -chdir=infrastructure/bootstrap validate
+terraform -chdir=infrastructure init -backend=false -input=false -lockfile=readonly
+terraform -chdir=infrastructure validate
+# por módulo (init -backend=false + validate) e, nos módulos com tests/:
+terraform -chdir=infrastructure/modules/oidc test
+```
+
+O `terraform plan` não roda nesta validação: os data sources (`aws_availability_zones`, `aws_ecr_repository`) exigem a AWS, e o plan real é uma etapa à parte, só com credencial de leitura (`kxc-readonly`) e `-lock=false`. Os lockfiles dos dois roots (`.terraform.lock.hcl`, `hashicorp/aws` 6.68.0 com hashes para `windows_amd64`, `linux_amd64`, `linux_arm64` e `darwin_arm64`) são versionados; os dos módulos não.
+
+### Ordem de execução: bootstrap → primeira imagem → stack
+
+1. **Bootstrap** (uma vez, state local; o `terraform.tfstate` é sensível e nunca é versionado):
+   copie `bootstrap/terraform.tfvars.example` para `bootstrap/secrets.tfvars` (ignorado pelo git), troque `<GITHUB_OWNER>` e `<EMAIL>` e rode `init`, `plan -var-file=secrets.tfvars` e, com aprovação explícita, `apply`. Cria o bucket de state, o ECR, o budget e o OIDC com `gha-plan`, `gha-deploy` e `gha-infra`.
+2. **GitHub**: crie os environments `deploy` e `infra` (só a branch `main`; aprovação obrigatória no `infra`) e as variáveis do repositório com as saídas do bootstrap: `AWS_PLAN_ROLE_ARN`, `AWS_DEPLOY_ROLE_ARN`, `AWS_INFRA_ROLE_ARN`, `TF_STATE_BUCKET`, `TF_STATE_KEY` e `AWS_REGION`.
+3. **Primeira imagem**: `deploy.yml` com `only_build=true` publica a imagem (tag = SHA do commit) no ECR. Sem ela a task não sobe.
+4. **Stack**: `infra.yml` (ou, localmente com perfil de escrita ativado pelo Leandro) roda
+   `terraform init -backend-config="bucket=<TF_STATE_BUCKET>" -backend-config="key=<TF_STATE_KEY>" -backend-config="region=<AWS_REGION>"` e depois `plan`/`apply` com `-var-file=environments/dev.tfvars -var image_tag=<sha>`.
+5. **Depois da janela de avaliação**: `terraform destroy` e `tools/residual-check.sh`. O bootstrap (bucket de state, ECR, budget, OIDC) permanece.
+
+---
+
 ## Arquitetura alvo
 
 ```
@@ -61,10 +112,15 @@ Documente os problemas que encontrou e como os corrigiu. Isso faz parte da avali
 
 ```
 infrastructure/
-├── main.tf                 # (vazio) composição raiz dos módulos — a completar
-├── variables.tf            # (vazio) variáveis raiz — a completar
+├── versions.tf             # terraform >= 1.11, aws ~> 6.68, backend "s3" parcial
+├── providers.tf            # provider com default_tags
+├── main.tf                 # composição raiz dos módulos (trilha ECS)
+├── variables.tf
+├── outputs.tf
+├── .terraform.lock.hcl     # versionado (aws 6.68.0)
+├── bootstrap/              # root aplicado uma vez, state LOCAL: bucket de state, ECR, budget, OIDC
 ├── environments/
-│   ├── dev.tfvars          # rede pronta; demais variáveis a completar
+│   ├── dev.tfvars
 │   ├── hml.tfvars
 │   └── prod.tfvars
 ├── config/
@@ -87,7 +143,14 @@ infrastructure/
     │   ├── security-group/
     │   ├── iam-role/
     │   └── parameter-store/
-    └── ecs/                         # cluster + task definition + service (Fargate)
+    ├── ecs/                         # cluster + task definition + service (Fargate)
+    ├── ecr/                         # repositório IMMUTABLE com scan e lifecycle
+    ├── rds/                         # PostgreSQL privado, senha gerenciada pelo RDS
+    ├── cloudmap/                    # namespace privado + serviço SRV
+    ├── apigw/                       # HTTP API + VPC Link V2 + integração + estágio $default
+    ├── autoscaling/                 # target tracking de CPU
+    ├── budget/                      # AWS Budgets (include_credit = false)
+    └── oidc/                        # provider OIDC do GitHub + roles gha-plan, gha-deploy, gha-infra
 ```
 
 Os recursos estão separados em módulos para você compor o encadeamento e expor seu raciocínio de organização.
@@ -109,6 +172,8 @@ Os recursos estão separados em módulos para você compor o encadeamento e expo
 ---
 
 ## Como executar
+
+> Texto original do desafio. Para esta implementação siga a seção "Ordem de execução: bootstrap → primeira imagem → stack" acima (o backend é S3 parcial e o Terraform exigido é >= 1.11).
 
 Pré-requisitos: Terraform >= 1.5, credenciais AWS configuradas, aplicação já publicada no ECR.
 

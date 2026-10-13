@@ -1,17 +1,15 @@
 variable "vpc_id" {
-  type = string
+  description = "ID da VPC onde as route tables serão criadas"
+  type        = string
 }
 
 variable "subnet_ids" {
-  description = "Lista com as duas subnets públicas (em ordem)"
+  description = "Lista com as subnets (em ordem); uma route table é criada por subnet"
   type        = list(string)
 }
 
 variable "tags" {
-  type = map(string)
-}
-
-variable "azs" {
-  type    = list(string)
-  default = ["us-east-1a", "us-east-1b", "us-east-1c"]
+  description = "Tags aplicadas às route tables"
+  type        = map(string)
+  default     = {}
 }

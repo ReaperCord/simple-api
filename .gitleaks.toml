@@ -1,0 +1,13 @@
+# Configuracao do Gitleaks (lida automaticamente quando a raiz do repo e o alvo de 'gitleaks dir' / 'gitleaks git').
+# Mantem todas as regras padrao e abre uma unica excecao, restrita por arquivo + texto + regra.
+title = "simple-api gitleaks"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Falso positivo [2026-10-13]: 'rule_key' e o nome da chave da regra de SG (identificador estatico usado no for_each), nao um segredo."
+condition   = "AND"
+targetRules = ["generic-api-key"]
+paths       = ['''infrastructure/config/security_rules/rules-sg-rds\.json''']
+regexes     = ['''^from-ecs-5432$''']

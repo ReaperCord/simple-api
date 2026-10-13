@@ -1,0 +1,13 @@
+{
+  "ingress": [
+    {
+      "rule_key": "from-ecs-5432",
+      "description": "Allow PostgreSQL from ECS tasks",
+      "from_port": 5432,
+      "to_port": 5432,
+      "protocol": "tcp",
+      "sg_refs": ["ecs"]
+    }
+  ],
+  "egress": []
+}

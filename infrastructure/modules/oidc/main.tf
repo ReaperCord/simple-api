@@ -1,0 +1,637 @@
+data "aws_caller_identity" "current" {}
+
+data "aws_partition" "current" {}
+
+locals {
+  partition  = data.aws_partition.current.partition
+  account_id = data.aws_caller_identity.current.account_id
+
+  # Claim sub EXATA de cada role (03-devsecops.md). Sem curingas: cada workflow roda num
+  # environment proprio do GitHub, entao um nao consegue assumir a role do outro.
+  # NAO existe gha-eks-lab aqui: o root eks-lab esta fora do escopo desta fase.
+  github_sub_prefix = "repo:${var.github_owner}/${var.github_repo}"
+  role_subjects = {
+    "gha-plan"   = "${local.github_sub_prefix}:pull_request"
+    "gha-deploy" = "${local.github_sub_prefix}:environment:deploy"
+    "gha-infra"  = "${local.github_sub_prefix}:environment:infra"
+  }
+
+  trust_policies = {
+    for role, sub in local.role_subjects : role => jsonencode({
+      Version = "2012-10-17"
+      Statement = [
+        {
+          Effect    = "Allow"
+          Principal = { Federated = aws_iam_openid_connect_provider.github.arn }
+          Action    = "sts:AssumeRoleWithWebIdentity"
+          Condition = {
+            StringEquals = {
+              "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
+              "token.actions.githubusercontent.com:sub" = sub
+            }
+          }
+        }
+      ]
+    })
+  }
+
+  role_policies = {
+    "gha-plan"   = data.aws_iam_policy_document.plan.json
+    "gha-deploy" = data.aws_iam_policy_document.deploy.json
+    "gha-infra"  = data.aws_iam_policy_document.infra.json
+  }
+
+  # ARNs construidos (sem account ID ou regiao literal).
+  state_bucket_arn = "arn:${local.partition}:s3:::${var.state_bucket_name}"
+  state_object_arn = "${local.state_bucket_arn}/${var.state_key}"
+  state_lock_arn   = "${local.state_bucket_arn}/${var.state_key}.tflock"
+
+  ecs_service_arn    = "arn:${local.partition}:ecs:${var.region}:${local.account_id}:service/${var.ecs_cluster_name}/${var.ecs_service_name}"
+  task_role_arns     = [for n in var.task_role_names : "arn:${local.partition}:iam::${local.account_id}:role/${n}"]
+  project_role_arn   = "arn:${local.partition}:iam::${local.account_id}:role/${var.project_name}-*"
+  project_policy_arn = "arn:${local.partition}:iam::${local.account_id}:policy/${var.project_name}-*"
+  # Prefixo de ARN regional; o servico entra no %s via format() (ex: format("${local.regional_prefix}:*", "ec2")).
+  regional_prefix = "arn:${local.partition}:%s:${var.region}:${local.account_id}"
+  apigateway_arn  = "arn:${local.partition}:apigateway:${var.region}::"
+}
+
+# Um provider OIDC do GitHub por conta. thumbprint_list nao e informado: no provider 6.68.0 o
+# atributo e opcional/computado (schema conferido com 'terraform providers schema -json').
+resource "aws_iam_openid_connect_provider" "github" {
+  url            = "https://token.actions.githubusercontent.com"
+  client_id_list = ["sts.amazonaws.com"]
+  tags           = var.tags
+}
+
+module "role" {
+  source   = "../security/iam-role"
+  for_each = local.role_subjects
+
+  role_name               = each.key
+  assume_role_policy_json = local.trust_policies[each.key]
+  policy_json             = local.role_policies[each.key]
+  tags                    = var.tags
+}
+
+resource "aws_iam_policy" "infra_iam_state" {
+  name        = "gha-infra-iam-state-policy"
+  description = "gha-infra: IAM do projeto, leitura do ECR e state"
+  policy      = data.aws_iam_policy_document.infra_iam_state.json
+  tags        = var.tags
+}
+
+resource "aws_iam_role_policy_attachment" "infra_iam_state" {
+  role       = module.role["gha-infra"].role_name
+  policy_arn = aws_iam_policy.infra_iam_state.arn
+}
+
+# ---------------------------------------------------------------------------------------------
+# gha-plan: leitura + state. Roda em pull_request; nao escreve em nenhum recurso da stack.
+# ---------------------------------------------------------------------------------------------
+data "aws_iam_policy_document" "plan" {
+  # Leituras de refresh do terraform plan. Resource "*" porque Describe*/List* nao aceitam ARN
+  # (excecao da tabela de 03-devsecops.md: leituras do gha-plan).
+  statement {
+    sid       = "ReadStackResources"
+    effect    = "Allow"
+    resources = ["*"]
+    actions = [
+      "ec2:Describe*",                               # VPC, subnets, route tables, IGW, SGs e AZs (data.aws_availability_zones)
+      "rds:Describe*",                               # instancia e subnet group do RDS
+      "rds:ListTagsForResource",                     # tags do RDS no refresh
+      "ecs:Describe*",                               # cluster, service e task definition
+      "ecs:List*",                                   # listagens usadas no refresh do ECS
+      "ecr:DescribeRepositories",                    # data.aws_ecr_repository
+      "ecr:ListTagsForResource",                     # tags do repositorio no data source
+      "servicediscovery:Get*",                       # namespace e servico do Cloud Map
+      "servicediscovery:List*",                      # tags e listagens do Cloud Map
+      "logs:DescribeLogGroups",                      # log group do ECS
+      "logs:ListTagsForResource",                    # tags do log group
+      "cloudwatch:DescribeAlarms",                   # alarmes da stack
+      "cloudwatch:ListTagsForResource",              # tags dos alarmes
+      "application-autoscaling:Describe*",           # scalable target e policy
+      "application-autoscaling:ListTagsForResource", # tags do scalable target
+      "iam:GetRole",                                 # roles de execucao e da task
+      "iam:ListRolePolicies",                        # policies inline da role
+      "iam:ListAttachedRolePolicies",                # policies anexadas a role
+      "iam:ListInstanceProfilesForRole",             # exigido pelo refresh de aws_iam_role
+      "iam:ListRoleTags",                            # tags da role
+      "iam:GetPolicy",                               # policy gerenciada da role
+      "iam:GetPolicyVersion",                        # documento da policy
+      "iam:ListPolicyVersions",                      # versoes da policy
+      "iam:ListPolicyTags",                          # tags da policy
+    ]
+  }
+
+  # API Gateway v2 aceita ARN: leitura so de APIs, VPC links e tags da regiao.
+  statement {
+    sid     = "ReadApiGateway"
+    effect  = "Allow"
+    actions = ["apigateway:GET"] # leitura da HTTP API, rotas, integracao, estagio e VPC link no refresh
+    resources = [
+      "${local.apigateway_arn}/apis",
+      "${local.apigateway_arn}/apis/*",
+      "${local.apigateway_arn}/vpclinks",
+      "${local.apigateway_arn}/vpclinks/*",
+      "${local.apigateway_arn}/tags/*",
+    ]
+  }
+
+  statement {
+    sid       = "ListStateBucket"
+    effect    = "Allow"
+    actions   = ["s3:ListBucket"] # backend S3 lista o bucket para localizar o state
+    resources = [local.state_bucket_arn]
+  }
+
+  statement {
+    sid       = "ReadState"
+    effect    = "Allow"
+    actions   = ["s3:GetObject"] # le o state remoto da stack (somente leitura)
+    resources = [local.state_object_arn]
+  }
+
+  # A trava nativa do S3 (use_lockfile) grava o objeto <key>.tflock tambem no plan.
+  statement {
+    sid    = "StateLockObject"
+    effect = "Allow"
+    actions = [
+      "s3:GetObject",    # le o lock existente
+      "s3:PutObject",    # cria o lock (PutObject condicional)
+      "s3:DeleteObject", # libera o lock ao fim do plan
+    ]
+    resources = [local.state_lock_arn]
+  }
+}
+
+# ---------------------------------------------------------------------------------------------
+# gha-deploy: build/push da imagem e UpdateService. Roda no environment "deploy".
+# ---------------------------------------------------------------------------------------------
+data "aws_iam_policy_document" "deploy" {
+  # Resource "*": a AWS nao aceita ARN em ecr:GetAuthorizationToken (excecao da tabela de 03-devsecops.md).
+  statement {
+    sid       = "EcrAuthToken"
+    effect    = "Allow"
+    actions   = ["ecr:GetAuthorizationToken"] # docker login no registry
+    resources = ["*"]
+  }
+
+  statement {
+    sid    = "EcrPushPull"
+    effect = "Allow"
+    actions = [
+      "ecr:BatchCheckLayerAvailability", # push: verifica camadas ja enviadas
+      "ecr:InitiateLayerUpload",         # push: inicia o upload de camada
+      "ecr:UploadLayerPart",             # push: envia partes da camada
+      "ecr:CompleteLayerUpload",         # push: conclui o upload da camada
+      "ecr:PutImage",                    # push: grava o manifesto da imagem
+      "ecr:BatchGetImage",               # Trivy image e pull do manifesto
+      "ecr:GetDownloadUrlForLayer",      # Trivy image e pull de camadas
+      "ecr:DescribeImages",              # checa se a tag do commit ja existe antes do push
+    ]
+    resources = [var.ecr_repository_arn]
+  }
+
+  statement {
+    sid    = "EcsUpdateService"
+    effect = "Allow"
+    actions = [
+      "ecs:UpdateService",    # aponta o service para a nova revisao da task definition
+      "ecs:DescribeServices", # espera a estabilidade e captura a revisao anterior para rollback
+    ]
+    resources = [local.ecs_service_arn]
+  }
+
+  # Resource "*": o ECS nao suporta permissao por recurso em task definitions (excecao da tabela de 03-devsecops.md).
+  statement {
+    sid    = "EcsTaskDefinition"
+    effect = "Allow"
+    actions = [
+      "ecs:RegisterTaskDefinition", # registra a nova revisao com a imagem por digest
+      "ecs:DescribeTaskDefinition", # le a revisao ativa para renderizar a nova
+    ]
+    resources = ["*"]
+  }
+
+  statement {
+    sid       = "PassTaskRoles"
+    effect    = "Allow"
+    actions   = ["iam:PassRole"] # a task definition referencia as roles de execucao e da aplicacao
+    resources = local.task_role_arns
+
+    condition {
+      test     = "StringEquals"
+      variable = "iam:PassedToService"
+      values   = ["ecs-tasks.amazonaws.com"]
+    }
+  }
+}
+
+# ---------------------------------------------------------------------------------------------
+# gha-infra: aplica a stack principal. Roda no environment "infra" (aprovacao manual).
+# Risco residual: pode criar roles/policies com o prefixo do projeto (ver README).
+# ---------------------------------------------------------------------------------------------
+data "aws_iam_policy_document" "infra" {
+  # Resource "*": Describe* nao aceita ARN.
+  statement {
+    sid       = "DescribeRegional"
+    effect    = "Allow"
+    resources = ["*"]
+    actions = [
+      "ec2:Describe*",                                     # refresh de rede e AZs
+      "rds:Describe*",                                     # refresh do RDS
+      "ecs:Describe*",                                     # refresh do ECS
+      "ecs:List*",                                         # listagens do ECS
+      "servicediscovery:Get*",                             # refresh do Cloud Map e espera das operacoes assincronas
+      "servicediscovery:List*",                            # listagens do Cloud Map
+      "cloudwatch:DescribeAlarms",                         # nao aceita ARN
+      "application-autoscaling:RegisterScalableTarget",    # scalable target do service (nao aceita ARN)
+      "application-autoscaling:DeregisterScalableTarget",  # destroy do scalable target (nao aceita ARN)
+      "application-autoscaling:PutScalingPolicy",          # policy de target tracking (nao aceita ARN)
+      "application-autoscaling:DeleteScalingPolicy",       # destroy da policy (nao aceita ARN)
+      "application-autoscaling:DescribeScalableTargets",   # refresh (nao aceita ARN)
+      "application-autoscaling:DescribeScalingPolicies",   # refresh (nao aceita ARN)
+      "application-autoscaling:DescribeScalingActivities", # espera do scaling (nao aceita ARN)
+      "application-autoscaling:ListTagsForResource",       # tags do scalable target
+      "application-autoscaling:TagResource",               # tags do scalable target
+      "application-autoscaling:UntagResource",             # tags do scalable target
+    ]
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestedRegion"
+      values   = [var.region]
+    }
+  }
+
+  # Resource "*": o ECS nao suporta permissao por recurso em task definitions.
+  statement {
+    sid       = "EcsRegisterTaskDefinition"
+    effect    = "Allow"
+    actions   = ["ecs:RegisterTaskDefinition"] # revisao inicial da task definition
+    resources = ["*"]
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestedRegion"
+      values   = [var.region]
+    }
+  }
+
+  statement {
+    sid       = "Ec2Network"
+    effect    = "Allow"
+    resources = [format("${local.regional_prefix}:*", "ec2")]
+    actions = [
+      "ec2:CreateVpc",                                  # VPC
+      "ec2:DeleteVpc",                                  # destroy da VPC
+      "ec2:ModifyVpcAttribute",                         # enable_dns_support e enable_dns_hostnames
+      "ec2:CreateSubnet",                               # subnets publicas e privadas
+      "ec2:DeleteSubnet",                               # destroy das subnets
+      "ec2:ModifySubnetAttribute",                      # map_public_ip_on_launch
+      "ec2:CreateInternetGateway",                      # IGW
+      "ec2:DeleteInternetGateway",                      # destroy do IGW
+      "ec2:AttachInternetGateway",                      # IGW na VPC
+      "ec2:DetachInternetGateway",                      # destroy do IGW
+      "ec2:CreateRouteTable",                           # route tables
+      "ec2:DeleteRouteTable",                           # destroy das route tables
+      "ec2:CreateRoute",                                # rota default das subnets publicas
+      "ec2:ReplaceRoute",                               # update da rota
+      "ec2:DeleteRoute",                                # destroy da rota
+      "ec2:AssociateRouteTable",                        # route table x subnet
+      "ec2:DisassociateRouteTable",                     # destroy da associacao
+      "ec2:CreateSecurityGroup",                        # SGs do VPC Link, ECS e RDS
+      "ec2:DeleteSecurityGroup",                        # destroy dos SGs
+      "ec2:AuthorizeSecurityGroupIngress",              # regras aws_vpc_security_group_ingress_rule
+      "ec2:AuthorizeSecurityGroupEgress",               # regras aws_vpc_security_group_egress_rule
+      "ec2:RevokeSecurityGroupIngress",                 # remocao de regras
+      "ec2:RevokeSecurityGroupEgress",                  # remove o egress padrao do SG novo e regras
+      "ec2:ModifySecurityGroupRules",                   # update in-place de regras
+      "ec2:UpdateSecurityGroupRuleDescriptionsIngress", # descricao das regras de entrada
+      "ec2:UpdateSecurityGroupRuleDescriptionsEgress",  # descricao das regras de saida
+      "ec2:CreateTags",                                 # tags e default_tags
+      "ec2:DeleteTags",                                 # update de tags
+    ]
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestedRegion"
+      values   = [var.region]
+    }
+  }
+
+  statement {
+    sid       = "Rds"
+    effect    = "Allow"
+    resources = [format("${local.regional_prefix}:*", "rds")]
+    actions = [
+      "rds:CreateDBInstance",       # instancia PostgreSQL
+      "rds:ModifyDBInstance",       # update in-place da instancia
+      "rds:DeleteDBInstance",       # destroy da instancia
+      "rds:CreateDBSnapshot",       # snapshot final quando skip_final_snapshot = false
+      "rds:CreateDBSubnetGroup",    # subnet group
+      "rds:ModifyDBSubnetGroup",    # update do subnet group
+      "rds:DeleteDBSubnetGroup",    # destroy do subnet group
+      "rds:AddTagsToResource",      # tags
+      "rds:RemoveTagsFromResource", # tags
+    ]
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestedRegion"
+      values   = [var.region]
+    }
+  }
+
+  # manage_master_user_password: o usuario que cria a instancia precisa destas permissoes
+  # (https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/rds-secrets-manager.html).
+  statement {
+    sid    = "RdsManagedSecret"
+    effect = "Allow"
+    resources = [
+      format("${local.regional_prefix}:secret:rds!*", "secretsmanager"),
+      format("${local.regional_prefix}:key/*", "kms"),
+    ]
+    actions = [
+      "secretsmanager:CreateSecret", # RDS cria o segredo da senha master
+      "secretsmanager:TagResource",  # tags do segredo
+      "kms:DescribeKey",             # descreve a chave aws/secretsmanager
+    ]
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestedRegion"
+      values   = [var.region]
+    }
+  }
+
+  statement {
+    sid       = "Ecs"
+    effect    = "Allow"
+    resources = [format("${local.regional_prefix}:*", "ecs")]
+    actions = [
+      "ecs:CreateCluster",         # cluster
+      "ecs:UpdateCluster",         # update do cluster
+      "ecs:UpdateClusterSettings", # containerInsights
+      "ecs:DeleteCluster",         # destroy do cluster
+      "ecs:CreateService",         # service
+      "ecs:UpdateService",         # update do service
+      "ecs:DeleteService",         # destroy do service
+      "ecs:TagResource",           # tags
+      "ecs:UntagResource",         # tags
+      "ecs:ListTagsForResource",   # tags no refresh
+    ]
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestedRegion"
+      values   = [var.region]
+    }
+  }
+
+  # DescribeLogGroups so aceita o ARN generico de log groups.
+  statement {
+    sid       = "LogsDescribe"
+    effect    = "Allow"
+    resources = [format("${local.regional_prefix}:log-group:*", "logs")]
+    actions   = ["logs:DescribeLogGroups"] # refresh do log group
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestedRegion"
+      values   = [var.region]
+    }
+  }
+
+  statement {
+    sid       = "LogsProjectGroups"
+    effect    = "Allow"
+    resources = [format("${local.regional_prefix}:log-group:/ecs/${var.project_name}-*", "logs")]
+    actions = [
+      "logs:CreateLogGroup",        # log group /ecs/<service>
+      "logs:DeleteLogGroup",        # destroy do log group
+      "logs:PutRetentionPolicy",    # retencao dos logs
+      "logs:DeleteRetentionPolicy", # update da retencao
+      "logs:TagResource",           # tags
+      "logs:UntagResource",         # tags
+      "logs:ListTagsForResource",   # tags no refresh
+    ]
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestedRegion"
+      values   = [var.region]
+    }
+  }
+
+  statement {
+    sid       = "CloudMap"
+    effect    = "Allow"
+    resources = [format("${local.regional_prefix}:*", "servicediscovery")]
+    actions = [
+      "servicediscovery:CreatePrivateDnsNamespace", # namespace privado
+      "servicediscovery:DeleteNamespace",           # destroy do namespace
+      "servicediscovery:CreateService",             # servico SRV
+      "servicediscovery:UpdateService",             # update do servico
+      "servicediscovery:DeleteService",             # destroy do servico
+      "servicediscovery:TagResource",               # tags
+      "servicediscovery:UntagResource",             # tags
+    ]
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestedRegion"
+      values   = [var.region]
+    }
+  }
+
+  # O namespace privado do Cloud Map cria e remove uma zona hospedada privada (Route 53 e global,
+  # sem aws:RequestedRegion).
+  statement {
+    sid       = "CloudMapHostedZone"
+    effect    = "Allow"
+    resources = ["arn:${local.partition}:route53:::hostedzone/*", "arn:${local.partition}:route53:::change/*"]
+    actions = [
+      "route53:CreateHostedZone",    # zona privada do namespace
+      "route53:DeleteHostedZone",    # destroy da zona
+      "route53:GetHostedZone",       # leitura da zona
+      "route53:GetChange",           # espera a propagacao
+      "route53:ListTagsForResource", # tags da zona
+    ]
+  }
+
+  statement {
+    sid    = "ApiGateway"
+    effect = "Allow"
+    actions = [
+      "apigateway:GET",    # leitura no refresh
+      "apigateway:POST",   # cria API, VPC link, integracao, rota e estagio
+      "apigateway:PUT",    # tags
+      "apigateway:PATCH",  # update de API, integracao, rota e estagio
+      "apigateway:DELETE", # destroy
+    ]
+    resources = [
+      "${local.apigateway_arn}/apis",
+      "${local.apigateway_arn}/apis/*",
+      "${local.apigateway_arn}/vpclinks",
+      "${local.apigateway_arn}/vpclinks/*",
+      "${local.apigateway_arn}/tags/*",
+    ]
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestedRegion"
+      values   = [var.region]
+    }
+  }
+
+  # O Application Auto Scaling cria e atualiza os alarmes do target tracking em nome do chamador.
+  statement {
+    sid    = "AlarmsTargetTrackingAndStack"
+    effect = "Allow"
+    resources = [
+      format("${local.regional_prefix}:alarm:TargetTracking-*", "cloudwatch"),
+      format("${local.regional_prefix}:alarm:${var.project_name}-*", "cloudwatch"),
+    ]
+    actions = [
+      "cloudwatch:PutMetricAlarm",      # alarmes da stack e do target tracking
+      "cloudwatch:DeleteAlarms",        # destroy dos alarmes
+      "cloudwatch:TagResource",         # tags
+      "cloudwatch:UntagResource",       # tags
+      "cloudwatch:ListTagsForResource", # tags no refresh
+    ]
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestedRegion"
+      values   = [var.region]
+    }
+  }
+
+}
+
+# Segunda policy do gha-infra: IAM do projeto, leitura do ECR e state. Separada da primeira porque
+# uma policy gerenciada aceita no maximo 6.144 caracteres (sem espacos) e as duas somadas passam disso.
+data "aws_iam_policy_document" "infra_iam_state" {
+  # IAM limitado ao prefixo do projeto. As roles gha-* nao casam com o prefixo: o gha-infra nao
+  # edita as proprias roles nem as dos outros workflows.
+  statement {
+    sid       = "IamProjectRoles"
+    effect    = "Allow"
+    resources = [local.project_role_arn]
+    actions = [
+      "iam:CreateRole",                  # roles de execucao e da task
+      "iam:DeleteRole",                  # destroy das roles
+      "iam:GetRole",                     # refresh
+      "iam:UpdateAssumeRolePolicy",      # trust policy
+      "iam:TagRole",                     # tags
+      "iam:UntagRole",                   # tags
+      "iam:ListRoleTags",                # tags no refresh
+      "iam:ListRolePolicies",            # refresh
+      "iam:ListAttachedRolePolicies",    # refresh
+      "iam:ListInstanceProfilesForRole", # refresh de aws_iam_role
+    ]
+  }
+
+  # So anexa/desanexa policies do proprio projeto (evita anexar AdministratorAccess).
+  statement {
+    sid       = "IamAttachProjectPolicies"
+    effect    = "Allow"
+    resources = [local.project_role_arn]
+    actions = [
+      "iam:AttachRolePolicy", # anexa a policy de menor privilegio
+      "iam:DetachRolePolicy", # destroy do anexo
+    ]
+
+    condition {
+      test     = "ArnLike"
+      variable = "iam:PolicyARN"
+      values   = [local.project_policy_arn]
+    }
+  }
+
+  statement {
+    sid       = "IamProjectPolicies"
+    effect    = "Allow"
+    resources = [local.project_policy_arn]
+    actions = [
+      "iam:CreatePolicy",        # policies das roles do projeto
+      "iam:DeletePolicy",        # destroy
+      "iam:GetPolicy",           # refresh
+      "iam:GetPolicyVersion",    # refresh
+      "iam:ListPolicyVersions",  # refresh
+      "iam:CreatePolicyVersion", # update da policy
+      "iam:DeletePolicyVersion", # limpeza de versoes
+      "iam:TagPolicy",           # tags
+      "iam:UntagPolicy",         # tags
+      "iam:ListPolicyTags",      # tags no refresh
+    ]
+  }
+
+  statement {
+    sid       = "IamPassProjectRolesToEcs"
+    effect    = "Allow"
+    actions   = ["iam:PassRole"] # o service e a task definition usam as roles do projeto
+    resources = [local.project_role_arn]
+
+    condition {
+      test     = "StringEquals"
+      variable = "iam:PassedToService"
+      values   = ["ecs-tasks.amazonaws.com"]
+    }
+  }
+
+  # Primeiro uso de ECS, Application Auto Scaling, RDS e API Gateway na conta.
+  statement {
+    sid       = "IamServiceLinkedRoles"
+    effect    = "Allow"
+    actions   = ["iam:CreateServiceLinkedRole"] # cria as roles de servico se ainda nao existirem
+    resources = ["arn:${local.partition}:iam::${local.account_id}:role/aws-service-role/*"]
+
+    condition {
+      test     = "StringEquals"
+      variable = "iam:AWSServiceName"
+      values = [
+        "ecs.amazonaws.com",
+        "ecs.application-autoscaling.amazonaws.com",
+        "rds.amazonaws.com",
+        "ops.apigateway.amazonaws.com",
+      ]
+    }
+  }
+
+  statement {
+    sid       = "EcrReadRepository"
+    effect    = "Allow"
+    actions   = ["ecr:DescribeRepositories", "ecr:ListTagsForResource"] # data.aws_ecr_repository (a stack nao cria o repositorio)
+    resources = [var.ecr_repository_arn]
+  }
+
+  statement {
+    sid       = "ListStateBucket"
+    effect    = "Allow"
+    actions   = ["s3:ListBucket"] # backend S3 lista o bucket
+    resources = [local.state_bucket_arn]
+  }
+
+  statement {
+    sid    = "StateObject"
+    effect = "Allow"
+    actions = [
+      "s3:GetObject", # le o state
+      "s3:PutObject", # grava o state
+    ]
+    resources = [local.state_object_arn]
+  }
+
+  statement {
+    sid    = "StateLockObject"
+    effect = "Allow"
+    actions = [
+      "s3:GetObject",    # le o lock
+      "s3:PutObject",    # cria o lock
+      "s3:DeleteObject", # libera o lock
+    ]
+    resources = [local.state_lock_arn]
+  }
+}

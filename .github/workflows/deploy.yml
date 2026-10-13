@@ -1,0 +1,214 @@
+# Build unico, scan e deploy da MESMA imagem (por digest) no ECS (06-cicd.md).
+# Autenticacao somente por OIDC: role gha-deploy, environment "deploy" (sub = ...:environment:deploy).
+# Primeira imagem (antes do infra.yml criar a stack): workflow_dispatch com only_build = true.
+name: deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "application/**"
+  workflow_dispatch:
+    inputs:
+      only_build:
+        description: "Somente build, scan e push da imagem (sem deploy no ECS). Use para publicar a primeira imagem."
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write # assume gha-deploy; este workflow tem um unico job, que assume a role
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+env:
+  # Nomes da stack dev (convencao <project>-<env>; a role gha-deploy so alcanca este service).
+  ECR_REPOSITORY: simple-api
+  ECS_CLUSTER: simple-api-dev
+  ECS_SERVICE: simple-api-dev
+  CONTAINER_NAME: simple-api
+
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    environment: deploy
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Credenciais AWS via OIDC (gha-deploy)
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Login no ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2.1.7
+
+      # Tags do ECR sao imutaveis: num re-run do mesmo SHA a tag ja existe e o push e pulado.
+      - name: A tag do commit ja existe no ECR?
+        id: exists
+        run: |
+          set -euo pipefail
+          if aws ecr describe-images --repository-name "${ECR_REPOSITORY}" --image-ids "imageTag=${GITHUB_SHA}" > /dev/null 2> "${RUNNER_TEMP}/describe.err"; then
+            echo "found=true" >> "${GITHUB_OUTPUT}"
+            echo "Tag ${GITHUB_SHA} ja existe: push sera pulado."
+          elif grep -q ImageNotFoundException "${RUNNER_TEMP}/describe.err"; then
+            echo "found=false" >> "${GITHUB_OUTPUT}"
+          else
+            cat "${RUNNER_TEMP}/describe.err"
+            exit 1
+          fi
+
+      - name: QEMU
+        if: ${{ steps.exists.outputs.found == 'false' }}
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+
+      - name: Buildx
+        if: ${{ steps.exists.outputs.found == 'false' }}
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      # Build multi-arch UMA unica vez. provenance/sbom desligados: o SBOM sai do Trivy e as
+      # attestations viram manifestos extras que contariam na politica de ciclo de vida do ECR.
+      - name: Build e push (linux/amd64,linux/arm64)
+        if: ${{ steps.exists.outputs.found == 'false' }}
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ./application
+          file: ./application/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: false
+          sbom: false
+          tags: ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+
+      # A partir daqui tudo usa o digest gravado no ECR (scan e deploy da mesma imagem).
+      - name: Digest da imagem enviada
+        id: image
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          set -euo pipefail
+          digest="$(aws ecr describe-images --repository-name "${ECR_REPOSITORY}" --image-ids "imageTag=${GITHUB_SHA}" --query 'imageDetails[0].imageDigest' --output text)"
+          if [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::digest invalido: ${digest}"
+            exit 1
+          fi
+          echo "ref=${REGISTRY}/${ECR_REPOSITORY}@${digest}" >> "${GITHUB_OUTPUT}"
+          echo "Imagem: ${REGISTRY}/${ECR_REPOSITORY}@${digest}" >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Trivy image no digest (amd64)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: ${{ steps.image.outputs.ref }}
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          format: table
+
+      - name: Trivy image no digest (arm64, plataforma de producao)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_PLATFORM: linux/arm64
+        with:
+          scan-type: image
+          image-ref: ${{ steps.image.outputs.ref }}
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          format: table
+
+      - name: SBOM CycloneDX
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_PLATFORM: linux/arm64
+        with:
+          scan-type: image
+          image-ref: ${{ steps.image.outputs.ref }}
+          format: cyclonedx
+          output: sbom.cdx.json
+          exit-code: "0"
+
+      - name: Publicar SBOM como artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sbom-cyclonedx-${{ github.sha }}
+          path: sbom.cdx.json
+          if-no-files-found: error
+
+      # Revisao em uso pelo service ANTES do deploy: base do render e alvo do rollback.
+      - name: Capturar a task definition ativa do service
+        id: previous
+        if: ${{ !inputs.only_build }}
+        run: |
+          set -euo pipefail
+          prev="$(aws ecs describe-services --cluster "${ECS_CLUSTER}" --services "${ECS_SERVICE}" --query 'services[0].taskDefinition' --output text)"
+          if [[ -z "${prev}" || "${prev}" == "None" ]]; then
+            echo "::error::service ${ECS_SERVICE} nao encontrado no cluster ${ECS_CLUSTER}; rode o infra.yml (apply) antes."
+            exit 1
+          fi
+          echo "arn=${prev}" >> "${GITHUB_OUTPUT}"
+          aws ecs describe-task-definition --task-definition "${prev}" --query taskDefinition --output json > "${RUNNER_TEMP}/task-definition.json"
+          echo "Revisao anterior: ${prev}" >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Renderizar a task definition com a imagem por digest
+        id: render
+        if: ${{ !inputs.only_build }}
+        uses: aws-actions/amazon-ecs-render-task-definition@8d79160660ad39c402a16e5fc7cd2a32e8f7d6b7 # v1.9.1
+        with:
+          task-definition: ${{ runner.temp }}/task-definition.json
+          container-name: ${{ env.CONTAINER_NAME }}
+          image: ${{ steps.image.outputs.ref }}
+
+      - name: Deploy no ECS (espera estabilidade)
+        id: deploy
+        if: ${{ !inputs.only_build }}
+        uses: aws-actions/amazon-ecs-deploy-task-definition@a00d4d57ac0de1a99b39fe469f3d898d38717c2b # v2.6.4
+        with:
+          task-definition: ${{ steps.render.outputs.task-definition }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          service: ${{ env.ECS_SERVICE }}
+          wait-for-service-stability: true
+          wait-for-minutes: 15
+
+      - name: Smoke test (GET / e GET /connect = 200)
+        id: smoke
+        if: ${{ !inputs.only_build }}
+        env:
+          API_URL: ${{ vars.API_URL }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${API_URL}" ]]; then
+            echo "::error::vars.API_URL nao definida (output api_endpoint da stack)."
+            exit 1
+          fi
+          failed=0
+          for path in "/" "/connect"; do
+            code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 --retry 5 --retry-delay 5 --retry-all-errors "${API_URL%/}${path}" || true)"
+            echo "GET ${path} -> ${code}"
+            if [[ "${code}" != "200" ]]; then
+              echo "::error::GET ${path} devolveu ${code}"
+              failed=1
+            fi
+          done
+          exit "${failed}"
+
+      # Falha em qualquer passo apos o inicio do deploy: volta o service para a revisao anterior
+      # e o job continua marcado como falho.
+      - name: Rollback para a revisao anterior
+        if: ${{ failure() && steps.deploy.conclusion != 'skipped' && steps.previous.outputs.arn != '' }}
+        env:
+          PREVIOUS_ARN: ${{ steps.previous.outputs.arn }}
+        run: |
+          set -euo pipefail
+          echo "::warning::Rollback para ${PREVIOUS_ARN}"
+          aws ecs update-service --cluster "${ECS_CLUSTER}" --service "${ECS_SERVICE}" --task-definition "${PREVIOUS_ARN}" --query 'service.taskDefinition' --output text
+          aws ecs wait services-stable --cluster "${ECS_CLUSTER}" --services "${ECS_SERVICE}"
+          echo "Rollback aplicado: ${PREVIOUS_ARN}" >> "${GITHUB_STEP_SUMMARY}"

@@ -1,52 +1,77 @@
-const { Client } = require('pg');
-const express = require('express');
+'use strict';
 
-(async () => {
-    const app = express()
-    const port = process.env.API_PORT || 3000
-    let i = 0
+const { createApp } = require('./app');
+const { loadConfig, ConfigError } = require('./config');
+const { createDb } = require('./db');
+const { createLogger } = require('./logger');
+const { createSecretProvider, createAwsSecretFetcher } = require('./secret');
 
-    app.listen(port, () => {
-        console.log(`API iniciada. Escutando PORT ${port}`)
-    })
+// Encerramento ordenado: para de aceitar conexoes, fecha o pool e sai com 0.
+// O timer de seguranca (unref) forca saida 1 se algo travar.
+async function shutdown({ server, db, logger, timeoutMs, exit = process.exit }) {
+  const timer = setTimeout(() => {
+    logger.error('shutdown excedeu o tempo limite', { timeout_ms: timeoutMs });
+    exit(1);
+  }, timeoutMs);
+  timer.unref();
+  try {
+    await new Promise((resolve, reject) => {
+      server.close((err) => (err ? reject(err) : resolve()));
+      if (typeof server.closeIdleConnections === 'function') server.closeIdleConnections();
+    });
+    await db.end();
+    clearTimeout(timer);
+    exit(0);
+  } catch (err) {
+    clearTimeout(timer);
+    logger.error('falha no shutdown', { err });
+    exit(1);
+  }
+}
 
-    app.use((req, res, next) => {
-        i++;
-        next();
-    })
+function main() {
+  let config;
+  try {
+    config = loadConfig();
+  } catch (err) {
+    if (!(err instanceof ConfigError)) throw err;
+    createLogger().error('configuracao invalida', { reason: err.message });
+    process.exit(1);
+  }
 
-    app.get('/', async (req, res) => {
-        const response = { 'message': "API OK!", 'request_id': i }
-        console.log(response)
-        res.send(response)
-    })
+  const logger = createLogger({ level: config.logLevel });
 
-    app.get('/connect', async (req, res) => {
-        try {
-            const client = new Client({
-                user: process.env.DB_USER,
-                host: process.env.DB_HOST,
-                database: process.env.DB_DATABASE,
-                password: process.env.DB_PASSWORD,
-                port: process.env.DB_PORT || 5432,
-            })
-            await client.connect()
+  let secretProvider = null;
+  if (config.db.secretArn) {
+    try {
+      secretProvider = createSecretProvider({
+        fetchSecret: createAwsSecretFetcher(config.db.secretArn),
+      });
+    } catch (err) {
+      logger.error('leitor de segredo indisponivel', { reason: err.message });
+      process.exit(1);
+    }
+  }
 
-            const result = await client.query('SELECT version()')
-            const version = result.rows[0].version
+  const db = createDb({ config, logger, secretProvider });
+  const app = createApp({ db, logger, config });
 
-            await client.end()
+  // listen DEPOIS de montar todas as rotas.
+  const server = app.listen(config.port, () => {
+    logger.info(`API iniciada. Escutando PORT ${config.port}`);
+  });
 
-            const response = { 'message': "Conectado ao banco", 'version': version, 'request_id': i }
-            console.log(response)
-            res.send(response)
-        } catch (e) {
-            const error = { 'message': 'Erro ao se conectar ao banco', 'request_id': i }
-            console.log(error)
-            console.log(e)
+  let stopping = false;
+  const onSignal = (signal) => {
+    if (stopping) return;
+    stopping = true;
+    logger.info('sinal recebido, encerrando', { signal });
+    shutdown({ server, db, logger, timeoutMs: config.shutdownTimeoutMs });
+  };
+  process.on('SIGTERM', () => onSignal('SIGTERM'));
+  process.on('SIGINT', () => onSignal('SIGINT'));
+}
 
-            res.status(500);
-            res.send(error)
-        }
-    })
-})()
+if (require.main === module) main();
+
+module.exports = { shutdown };

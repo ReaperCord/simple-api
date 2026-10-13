@@ -1,0 +1,50 @@
+# Primeira rodada LOCAL (11/10/2026) — saída bruta do console, guardada só para rastreabilidade.
+# NÃO usar como referência de capacidade: outro host, sem aquecimento, UMA série por taxa, cota de CPU só na
+# thread principal (cgroup v1 'tasks'), variante 'fixed' SEM log por requisição, Postgres sem pinagem de núcleo.
+# Blocos 1–3: Postgres com autenticação 'trust'; blocos 4–6: com SCRAM (como o RDS).
+# Formato: variante rota taxa_oferecida rps_atingido %ok p50 p95 p99 max(ms) iterações_descartadas
+
+## 1) fixed /  — 0,25 vCPU, trust
+fixed / rate=200 rps=200 ok=100.0% p50=0.7 p95=1.3 p99=4.6 max=30 ms dropped=0
+fixed / rate=400 rps=400 ok=100.0% p50=0.4 p95=21.0 p99=68.5 max=134 ms dropped=0
+fixed / rate=800 rps=800 ok=100.0% p50=0.3 p95=4.8 p99=47.3 max=89 ms dropped=0
+fixed / rate=1200 rps=1200 ok=100.0% p50=0.4 p95=44.8 p99=75.2 max=125 ms dropped=0
+fixed / rate=1600 rps=1368 ok=94.1% p50=62.8 p95=2730.1 p99=5000.6 max=5025 ms dropped=3129
+fixed / rate=2000 rps=1696 ok=97.5% p50=68.9 p95=277.0 p99=5000.3 max=5025 ms dropped=1639
+fixed / rate=2600 rps=1781 ok=94.7% p50=94.6 p95=385.3 p99=5000.0 max=5044 ms dropped=9144
+
+## 2) orig /connect — 0,25 vCPU, trust
+orig /connect rate=25 rps=25 ok=100.0% p50=6.3 p95=9.8 p99=12.1 max=23 ms dropped=0
+orig /connect rate=50 rps=50 ok=100.0% p50=6.0 p95=9.2 p99=13.0 max=51 ms dropped=0
+orig /connect rate=100 rps=100 ok=100.0% p50=5.8 p95=10.3 p99=23.2 max=83 ms dropped=0
+orig /connect rate=150 rps=150 ok=100.0% p50=5.6 p95=60.4 p99=164.3 max=237 ms dropped=0
+orig /connect rate=200 rps=200 ok=100.0% p50=6.0 p95=34.1 p99=106.4 max=202 ms dropped=0
+
+## 3) fixed /connect — 0,25 vCPU, trust
+fixed /connect rate=100 rps=100 ok=100.0% p50=1.2 p95=2.9 p99=9.3 max=50 ms dropped=0
+fixed /connect rate=200 rps=200 ok=100.0% p50=1.0 p95=3.5 p99=43.1 max=83 ms dropped=0
+fixed /connect rate=400 rps=400 ok=100.0% p50=0.6 p95=2.8 p99=33.6 max=63 ms dropped=0
+fixed /connect rate=600 rps=600 ok=100.0% p50=0.5 p95=8.6 p99=38.2 max=71 ms dropped=0
+fixed /connect rate=800 rps=800 ok=100.0% p50=0.6 p95=48.6 p99=81.5 max=105 ms dropped=0
+fixed /connect rate=1000 rps=998 ok=100.0% p50=21.5 p95=83.2 p99=131.8 max=165 ms dropped=0
+
+## 4) orig /connect — 0,25 vCPU, SCRAM
+orig /connect rate=25 rps=25 ok=100.0% p50=9.5 p95=13.2 p99=15.9 max=27 ms dropped=0
+orig /connect rate=50 rps=50 ok=100.0% p50=9.4 p95=13.2 p99=17.6 max=54 ms dropped=0
+orig /connect rate=100 rps=86 ok=88.2% p50=1783.6 p95=4503.6 p99=5001.0 max=5023 ms dropped=32
+orig /connect rate=150 rps=102 ok=66.4% p50=1469.1 p95=5000.9 p99=5007.0 max=5024 ms dropped=214
+orig /connect rate=200 rps=127 ok=42.2% p50=843.6 p95=5000.9 p99=5007.0 max=5025 ms dropped=463
+orig /connect rate=300 rps=175 ok=26.2% p50=614.1 p95=5000.7 p99=5005.7 max=5024 ms dropped=997
+
+## 5) fixed /connect — 0,25 vCPU, SCRAM
+fixed /connect rate=400 rps=400 ok=100.0% p50=0.8 p95=21.5 p99=59.7 max=89 ms dropped=0
+fixed /connect rate=800 rps=800 ok=100.0% p50=0.8 p95=32.4 p99=48.2 max=66 ms dropped=0
+fixed /connect rate=1000 rps=997 ok=100.0% p50=23.3 p95=76.9 p99=104.5 max=135 ms dropped=0
+fixed /connect rate=1200 rps=718 ok=96.8% p50=979.2 p95=3421.4 p99=5000.1 max=5013 ms dropped=6708
+fixed /connect rate=1400 rps=928 ok=100.0% p50=957.7 p95=1178.0 p99=1446.1 max=1597 ms dropped=6432
+
+## 6) fixed /connect — 0,5 vCPU, SCRAM
+fixed /connect rate=1000 rps=1000 ok=100.0% p50=0.7 p95=49.6 p99=80.4 max=271 ms dropped=0
+fixed /connect rate=1500 rps=1500 ok=100.0% p50=0.6 p95=8.5 p99=22.5 max=88 ms dropped=0
+fixed /connect rate=2000 rps=1999 ok=100.0% p50=5.6 p95=53.7 p99=74.8 max=126 ms dropped=17
+fixed /connect rate=2500 rps=2258 ok=100.0% p50=102.5 p95=339.8 p99=380.3 max=453 ms dropped=3090

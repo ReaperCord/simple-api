@@ -1,0 +1,6 @@
+{
+  "default_igw": {
+    "cidr_block": "0.0.0.0/0",
+    "gateway_ref": "igw"
+  }
+}

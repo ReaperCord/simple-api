@@ -1,0 +1,262 @@
+{
+  "name": "kxc-iac",
+  "description": "Escreve e corrige o Terraform da stack principal e do bootstrap (exceto eks-lab).",
+  "prompt": "file://../prompts/iac.md",
+  "tools": [
+    "read",
+    "write",
+    "shell",
+    "web"
+  ],
+  "permissions": {
+    "rules": [
+      {
+        "capability": "shell",
+        "effect": "deny",
+        "match": [
+          "*rm -rf*",
+          "*rm -fr*",
+          "*rm -r *",
+          "sudo *",
+          "*git push --force*",
+          "*git push -f*",
+          "*git reset --hard*",
+          "*git clean -f*",
+          "*--privileged*",
+          "*-v /:/*",
+          "find * -delete*",
+          "find * -exec*",
+          "find * -ok *"
+        ]
+      },
+      {
+        "capability": "shell",
+        "effect": "deny",
+        "match": [
+          "*-auto-approve*",
+          "*terraform*init*-migrate-state*",
+          "*terraform*show*-json*",
+          "*terraform*output*-json*",
+          "*terraform*output*-raw*",
+          "*terraform*state pull*",
+          "*terraform*state push*",
+          "*terraform*state rm*",
+          "*terraform*state mv*",
+          "*terraform*console*",
+          "*terraform*force-unlock*"
+        ]
+      },
+      {
+        "capability": "shell",
+        "effect": "deny",
+        "match": [
+          "aws *delete-*",
+          "aws *terminate-*",
+          "aws *s3 rm*",
+          "aws *s3 rb*",
+          "aws *iam*create-access-key*",
+          "aws *iam*create-user*",
+          "aws *iam*create-login-profile*",
+          "*AdministratorAccess*"
+        ]
+      },
+      {
+        "capability": "shell",
+        "effect": "deny",
+        "match": [
+          "*tfstate*",
+          "*secretsmanager*get-secret-value*",
+          "*ssm*--with-decryption*",
+          "*rds*generate-db-auth-token*",
+          "*ecr*get-login-password*",
+          "*sts*assume-role*",
+          "*sts*get-session-token*",
+          "*sts*get-federation-token*",
+          "*sso*get-role-credentials*",
+          "*configure*export-credentials*",
+          "aws configure get*",
+          "*.aws/credentials*",
+          "*.aws/sso/*",
+          "*.aws/cli/cache*",
+          "*.ssh/*",
+          "*.kube/config*",
+          "*.docker/config.json*",
+          "*AWS_SECRET_ACCESS_KEY*",
+          "*AWS_SESSION_TOKEN*",
+          "env",
+          "printenv*",
+          "set",
+          "export -p*",
+          "*/proc/*/environ*",
+          "*.env",
+          "*.env.local*",
+          "*.env.production*",
+          "*.pem*",
+          "*id_rsa*"
+        ]
+      },
+      {
+        "capability": "shell",
+        "effect": "deny",
+        "match": [
+          "gh api *-X*",
+          "gh api *--method*",
+          "gh api * -f *",
+          "gh api * -F *",
+          "gh api *--field*",
+          "gh api *--raw-field*",
+          "gh api *--input*",
+          "*npm audit fix --force*"
+        ]
+      },
+      {
+        "capability": "fs_read",
+        "effect": "deny",
+        "match": [
+          "**/*.tfstate",
+          "**/*.tfstate.*",
+          "**/.env",
+          "**/.env.*",
+          "**/*.pem",
+          "**/*.key",
+          "**/*credentials*",
+          "~/.aws/**",
+          "~/.ssh/**",
+          "~/.kube/**",
+          "~/.docker/config.json"
+        ],
+        "exclude": [
+          "**/.env.example"
+        ]
+      },
+      {
+        "capability": "fs_write",
+        "effect": "deny",
+        "match": [
+          "**/*.tfstate",
+          "**/*.tfstate.*",
+          "**/.env",
+          "**/.env.*",
+          "**/*.pem",
+          "**/*.key",
+          "**/*credentials*",
+          "~/.aws/**",
+          "~/.ssh/**",
+          "~/.kube/**",
+          "~/.docker/config.json",
+          ".kiro/steering/**",
+          ".kiro/agents/**",
+          ".kiro/prompts/**",
+          "AGENTS.md"
+        ],
+        "exclude": [
+          "**/.env.example"
+        ]
+      },
+      {
+        "capability": "shell",
+        "effect": "ask",
+        "match": [
+          "git commit*",
+          "git push*",
+          "git checkout -- *",
+          "git restore *",
+          "git stash drop*",
+          "git branch -D*",
+          "git rebase*"
+        ]
+      },
+      {
+        "capability": "fs_write",
+        "effect": "deny",
+        "match": [
+          "infrastructure/eks-lab/**"
+        ]
+      },
+      {
+        "capability": "fs_write",
+        "effect": "allow",
+        "match": [
+          "infrastructure/**"
+        ]
+      },
+      {
+        "capability": "shell",
+        "effect": "allow",
+        "match": [
+          "git status*",
+          "git diff*",
+          "git log*",
+          "git show*",
+          "ls*",
+          "cat *",
+          "grep *",
+          "rg *",
+          "find *",
+          "head *",
+          "tail *",
+          "wc *",
+          "jq *",
+          "tree*",
+          "pwd",
+          "which *",
+          "file *",
+          "du *",
+          "sha256sum *",
+          "aws * describe-*",
+          "aws * list-*",
+          "aws * get-*",
+          "aws sts get-caller-identity*",
+          "terraform fmt*",
+          "terraform validate*",
+          "terraform init -backend=false*",
+          "terraform version",
+          "terraform providers*",
+          "trivy config *",
+          "tflint*",
+          "terraform init",
+          "terraform init -upgrade*",
+          "terraform plan*",
+          "terraform graph*"
+        ]
+      },
+      {
+        "capability": "shell",
+        "effect": "ask",
+        "match": [
+          "terraform apply*",
+          "terraform destroy*",
+          "terraform import*",
+          "terraform state list*",
+          "terraform state show*"
+        ]
+      }
+    ]
+  },
+  "resources": [
+    "file://AGENTS.md",
+    "file://.kiro/steering/**/*.md",
+    "file://.kiro/prompts/_base.md"
+  ],
+  "hooks": [
+    {
+      "name": "contexto-git",
+      "trigger": "SessionStart",
+      "action": {
+        "type": "command",
+        "command": "git status --short && git log -1 --oneline"
+      }
+    },
+    {
+      "name": "fmt-apos-escrita",
+      "trigger": "PostToolUse",
+      "matcher": "^(fs_write|write|str_replace)$",
+      "action": {
+        "type": "command",
+        "command": "terraform fmt -recursive infrastructure >/dev/null 2>&1 || true"
+      }
+    }
+  ],
+  "includeMcpJson": false,
+  "welcomeMessage": "kxc-iac: infrastructure/** (sem eks-lab). Entrego plan + custo; apply/destroy só com sua aprovação."
+}

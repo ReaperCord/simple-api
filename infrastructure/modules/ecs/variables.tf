@@ -29,16 +29,47 @@ variable "container_port" {
   default     = 3000
 }
 
+variable "cpu_architecture" {
+  description = "Arquitetura de CPU da task Fargate (ARM64 ou X86_64); a imagem precisa ser multi-arch ou da mesma arquitetura"
+  type        = string
+  default     = "ARM64"
+
+  validation {
+    condition     = contains(["ARM64", "X86_64"], var.cpu_architecture)
+    error_message = "cpu_architecture deve ser ARM64 ou X86_64."
+  }
+}
+
 variable "task_cpu" {
-  description = "CPU alocada para a task (unidades Fargate)"
+  description = "CPU alocada para a task (unidades Fargate; 512 = 0,5 vCPU)"
   type        = number
-  default     = 256
+  default     = 512
+
+  validation {
+    condition     = contains([256, 512, 1024, 2048, 4096, 8192, 16384], var.task_cpu)
+    error_message = "task_cpu deve ser 256, 512, 1024, 2048, 4096, 8192 ou 16384."
+  }
 }
 
 variable "task_memory" {
-  description = "Memória alocada para a task (MiB)"
+  description = "Memória alocada para a task (MiB); precisa ser uma combinação válida com task_cpu no Fargate"
   type        = number
-  default     = 512
+  default     = 1024
+
+  # Combinações do Fargate (Linux): https://docs.aws.amazon.com/AmazonECS/latest/developerguide/fargate-tasks-services.html
+  validation {
+    condition = (
+      var.task_cpu == 256 ? contains([512, 1024, 2048], var.task_memory) :
+      var.task_cpu == 512 ? contains([1024, 2048, 3072, 4096], var.task_memory) :
+      var.task_cpu == 1024 ? (var.task_memory >= 2048 && var.task_memory <= 8192 && var.task_memory % 1024 == 0) :
+      var.task_cpu == 2048 ? (var.task_memory >= 4096 && var.task_memory <= 16384 && var.task_memory % 1024 == 0) :
+      var.task_cpu == 4096 ? (var.task_memory >= 8192 && var.task_memory <= 30720 && var.task_memory % 1024 == 0) :
+      var.task_cpu == 8192 ? (var.task_memory >= 16384 && var.task_memory <= 61440 && var.task_memory % 4096 == 0) :
+      var.task_cpu == 16384 ? (var.task_memory >= 32768 && var.task_memory <= 122880 && var.task_memory % 8192 == 0) :
+      false
+    )
+    error_message = "Combinacao task_cpu/task_memory invalida no Fargate (ex: 512 de CPU aceita 1024 a 4096 MiB; 512 MiB so existe com 256 de CPU)."
+  }
 }
 
 variable "desired_count" {
@@ -96,6 +127,54 @@ variable "secrets" {
     valueFrom = string
   }))
   default = []
+}
+
+variable "stop_timeout" {
+  description = "Segundos que o ECS espera o container encerrar apos SIGTERM antes do SIGKILL (stopTimeout)"
+  type        = number
+  default     = 30
+}
+
+variable "health_check_interval" {
+  description = "Intervalo (s) do healthCheck do container"
+  type        = number
+  default     = 30
+}
+
+variable "health_check_timeout" {
+  description = "Timeout (s) de cada execucao do healthCheck do container"
+  type        = number
+  default     = 5
+}
+
+variable "health_check_retries" {
+  description = "Falhas consecutivas ate o container ser considerado unhealthy"
+  type        = number
+  default     = 3
+}
+
+variable "health_check_start_period" {
+  description = "Periodo de carencia (s) apos o start em que falhas do healthCheck nao contam"
+  type        = number
+  default     = 15
+}
+
+variable "deployment_minimum_healthy_percent" {
+  description = "Percentual minimo de tasks saudaveis durante um deploy"
+  type        = number
+  default     = 100
+}
+
+variable "deployment_maximum_percent" {
+  description = "Percentual maximo de tasks (em relacao ao desired_count) durante um deploy"
+  type        = number
+  default     = 200
+}
+
+variable "service_registry_arn" {
+  description = "ARN do servico Cloud Map (registro SRV) para o service_registries; null desliga o registro"
+  type        = string
+  default     = null
 }
 
 variable "container_insights" {

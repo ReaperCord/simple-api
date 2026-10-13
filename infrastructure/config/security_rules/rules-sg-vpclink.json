@@ -1,0 +1,13 @@
+{
+  "ingress": [],
+  "egress": [
+    {
+      "rule_key": "to-ecs-3000",
+      "description": "Allow application traffic to ECS tasks",
+      "from_port": 3000,
+      "to_port": 3000,
+      "protocol": "tcp",
+      "sg_refs": ["ecs"]
+    }
+  ]
+}

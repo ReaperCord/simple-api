@@ -5,7 +5,6 @@ variable "tags" {
 }
 
 variable "vpc_id" {
-  description = "ID da VPC "
+  description = "ID da VPC onde o Internet Gateway será anexado"
   type        = string
 }
-

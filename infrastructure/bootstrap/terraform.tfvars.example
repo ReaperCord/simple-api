@@ -1,0 +1,15 @@
+# Copie para secrets.tfvars (ignorado pelo git) e troque os placeholders.
+# Uso: terraform apply -var-file=secrets.tfvars  (apply so com aprovacao explicita do Leandro)
+project_name = "simple-api"
+environment  = "dev"
+region       = "us-east-1"
+owner        = "leandro"
+ttl          = "none"
+
+github_owner = "<GITHUB_OWNER>"
+github_repo  = "simple-api"
+
+budget_emails = ["<EMAIL>"]
+
+# [PROPOSTA] a calibrar
+ecr_max_image_count = 10
