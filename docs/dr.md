@@ -17,7 +17,7 @@ Rótulos: `[FATO: fonte]`, `[HIPÓTESE]` e `[PROPOSTA]`. A decisão de fundo est
 
 ### RPO: meta de até 5 minutos
 
-- O RDS tem backups automáticos com retenção de 7 dias. [FATO: [`modules/rds/main.tf`](../infrastructure/modules/rds/main.tf) linha 32]
+- O módulo do RDS parametriza a retenção dos backups automáticos (alvo documentado: 7 dias). O Free plan desta conta recusa 7 (`FreeTierRestrictionError`) e o `dev` usa **1 dia**, ou seja, o PITR cobre só as últimas 24 h. [FATO: [`dev.tfvars`](../infrastructure/environments/dev.tfvars) `db_backup_retention_period = 1`; ADR 0011]. Na AWS (13/10/2026) o RDS criado gerou um snapshot automático, visível no Resource Group; nenhum restore foi feito.
 - A AWS envia os logs de transação do RDS ao S3 a cada cinco minutos, e o restore para um ponto no tempo aceita qualquer instante dentro da retenção. [FATO: https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_PIT.html, aberta em 13/10/2026]
 - Disso segue a meta de RPO de até 5 minutos. O valor real num incidente é a diferença entre o momento do incidente e o campo `LatestRestorableTime` da instância. [HIPÓTESE: o intervalo real de entrega dos logs pode variar; medir `LatestRestorableTime` antes de tratar 5 minutos como garantia]
 

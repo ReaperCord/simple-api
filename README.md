@@ -270,58 +270,64 @@ Só entram números da tabela de preços de [`02-finops-guardrails.md`](.kiro/st
 | [`docs/autoscaling.md`](docs/autoscaling.md) | Métrica, alvo, min e max, cooldowns, roteamento, conexões com o banco |
 | [`docs/dr.md`](docs/dr.md) | RPO e RTO, restore PITR, recriação em outra região ou conta |
 | [`docs/performance/benchmark-local.md`](docs/performance/benchmark-local.md) | Resumo dos CSV do benchmark LOCAL, conferido com a steering |
+| [`docs/performance/benchmark-aws.md`](docs/performance/benchmark-aws.md) | Carga na AWS (API Gateway e dentro da VPC), rotulada AWS, com ressalvas |
+| [`docs/plano/`](docs/plano/00-plano-execucao.md) | Plano de execução, auditoria de IAM da `gha-infra`, FinOps do apply e desenho da carga na VPC |
 | [`docs/adr/`](docs/adr/README.md) | Decisões de arquitetura |
 | [`docs/KIRO-SETUP.md`](docs/KIRO-SETUP.md) | Pacote de guardrails de agentes de IA |
 | [`AGENTS.md`](AGENTS.md) | Contrato de trabalho e regras anti-alucinação |
 
 ## Pendências
 
-O que **não** foi verificado, com a razão:
+Estado em 13/10/2026: a stack foi criada na AWS e testada (resultados em [`docs/performance/benchmark-aws.md`](docs/performance/benchmark-aws.md) e no plano de execução em [`docs/plano/`](docs/plano/00-plano-execucao.md)). Abaixo, o que foi verificado e o que continua sem verificação.
 
-**Na AWS (nada foi criado)**
-- `terraform plan` com backend real e `apply`: nunca rodaram. O bootstrap não foi aplicado, não existem bucket de state, ECR, budget, OIDC nem roles. Os environments `deploy` e `infra` e as variáveis do repositório no GitHub também não foram criados.
-- Nenhum workflow executou com as roles reais. As ações IAM de `gha-plan`, `gha-deploy` e `gha-infra` não foram exercitadas num apply (suspeitos: VPC Link V2, Cloud Map, `secretsmanager` e `kms` do RDS).
-- RDS real: criação, `max_connections` do `db.t4g.micro`, versão exata do PostgreSQL 16, preço real.
-- Secrets Manager real: leitura do segredo, formato do JSON e rotação de 7 dias.
-- TLS `verify-full` contra um RDS real.
-- Roteamento por API Gateway, VPC Link V2 e Cloud Map: não exercitado, inclusive se o API Gateway faz cache do `DiscoverInstances`.
-- Autoscaling: a reação de 3 a 5 minutos é estimativa da steering, não medida ([`docs/autoscaling.md`](docs/autoscaling.md)).
-- Conectividade das tasks até ECR, CloudWatch Logs e Secrets Manager por IP público, sem NAT nem endpoints.
+**Verificado na AWS**
+- Bootstrap aplicado (state local, nunca versionado): bucket de state, ECR, budget, provedor OIDC, roles `gha-plan`, `gha-deploy` e `gha-infra` e o Resource Group `kxc-simple-api-RG` (por tag `Project`). GitHub configurado: environments `deploy` e `infra` (com aprovação) e variáveis do repositório.
+- Apply da stack pelo `infra.yml` em duas rodadas (plan de 50 recursos). A primeira falhou parcialmente por permissões da `gha-infra` (`ecr:DescribeImages`, `apigateway:TagResource`, `route53:CreateHostedZone` e leituras do Route 53, `rds:ListTagsForResource`); cada falta foi corrigida em `modules/oidc/main.tf` com o motivo em comentário (least privilege iterativo) e o bootstrap reaplicado. A segunda rodada concluiu (17 recursos criados, sem novo AccessDenied).
+- O Free plan desta conta recusa `backup_retention_period = 7` (`FreeTierRestrictionError`): o `dev` usa 1, ou seja, **PITR de 1 dia** (o alvo documentado é 7).
+- Pelo API Gateway, `GET /`, `/health` e `/connect` respondem 200. O RDS é PostgreSQL 16.13 e o `max_connections` do `db.t4g.micro` é 79 (medido). O TLS `verify-full` e a leitura do segredo gerenciado pelo RDS funcionam (o `/connect` conecta). A imagem arm64 roda no Fargate.
+- `deploy.yml` de ponta a ponta: build multi-arch, Trivy nos dois digests, SBOM, deploy por digest no ECS e smoke do pipeline (run 38461659742).
+- Carga na AWS, rotulada AWS e separada da LOCAL: pelo API Gateway (smoke e baseline a 40 req/s) e dentro da VPC (load até 500, stress até 1.000 e rampa até 1.500 req/s, sem erro; o breakpoint não foi atingido). Detalhes, ressalvas e dados em `tests/load/results/`.
 
-**Build e testes**
-- Build `linux/arm64`: **verificado no CI**. O job `dockerfile` do PR #1 passou, inclusive o passo "Build arm64 (plataforma de producao, sem push)" com QEMU e buildx ([`ci.yml`](.github/workflows/ci.yml) linhas 95-120). O build arm64 local não é possível, porque o builder do Docker Desktop não tem QEMU. O `deploy.yml` publica `linux/amd64,linux/arm64` ([`deploy.yml`](.github/workflows/deploy.yml) linhas 69-89) e esse caminho ainda não rodou. A imagem arm64 nunca executou numa task Fargate. Também não foi verificado se `TRIVY_PLATFORM` chega ao scan arm64 do `deploy.yml`.
-- Os testes no container Node 24 citados aqui vêm da última execução registrada (48 testes: 44 passam, 4 de integração ignorados, 0 falham).
-- Semgrep, hadolint, Trivy e gitleaks passaram no CI do PR #1 e não foram reexecutados ao escrever este README.
+**Ainda não verificado**
+- Se o Cloud Map cobra `DiscoverInstances` por requisição: depende do Cost Explorer, que só mostra o custo no dia seguinte.
+- Autoscaling: o tempo de reação e de subida da task nova não foi medido (o autoscaling ficou suspenso nos testes de capacidade); só se mediu a CPU da task (~63% a 1.000 req/s). Os 3 a 5 minutos de [`docs/autoscaling.md`](docs/autoscaling.md) seguem estimativa.
+- Soak de 2 h, spike pelo API Gateway (exige elevar o throttling do estágio) e 3 séries por perfil (cada série usou a mesma task); throttling de CPU do Fargate não medido.
+- Rotação de 7 dias do segredo: a app invalida o cache em `28P01` (testado com cliente falso), mas uma rotação real não foi exercitada.
+- Conectividade das tasks até ECR, CloudWatch Logs e Secrets Manager por IP público, sem NAT nem endpoints: funcionou nos testes, sem análise de falhas.
+- Destroy completo e `tools/residual-check.sh` com exit 0 desta janela: ver o plano de execução.
+
+**Build, testes e CI**
+- Build `linux/arm64` verificado no CI (PR #1) e no `deploy.yml`. O build arm64 local não é possível (o builder do Docker Desktop não tem QEMU). Não foi verificado se `TRIVY_PLATFORM` chega ao scan arm64 do `deploy.yml`.
+- Os testes da app citados vêm da última execução registrada (48 testes: 44 passam, 4 de integração ignorados, 0 falham).
+- O `ci.yml` só roda em `pull_request`, e a integração neste projeto é por merge local no fork (sem PR), então a `main` atual não passou pelo CI. As três últimas execuções registradas (PRs antigos) falharam. O teste `terraform test` do módulo `oidc` estava desatualizado e foi corrigido e validado localmente (6 passam; budget, ecr e ecs seguem verdes). A falha do `terraform plan` do CI não foi diagnosticada.
 
 **Desempenho**
-- Nenhum benchmark na AWS. Os números de [`docs/performance/benchmark-local.md`](docs/performance/benchmark-local.md) são LOCAIS (VM x86, Node 22, pool de 5, Postgres sem TLS).
-- O benchmark local não foi repetido com a imagem final (`--cpus=0.5`, `DB_POOL_MAX=3`) e a compatibilidade do `load.js` com k6 2.x não foi conferida.
-- Não se sabe se o Fargate aplica a cota de CPU com throttling igual ao cgroup local.
+- O benchmark local não foi repetido com a imagem final (`--cpus=0.5`, `DB_POOL_MAX=3`) e a compatibilidade do `load.js` local com k6 2.x não foi conferida. Números LOCAIS e AWS não se misturam.
 
 **Segurança**
 - A API é pública e sem autenticação (contrato do desafio).
 - A aplicação usa o usuário master do banco. Um usuário só com `CONNECT` é pendência documentada.
-- A role `gha-infra` cria roles e policies com prefixo `simple-api-*` com conteúdo livre (escalada dentro do prefixo). O IAM Access Analyzer não foi usado para validar as policies, e não foi verificado se o Free plan o libera.
+- A role `gha-infra` cria roles e policies com prefixo `simple-api-*` com conteúdo livre (escalada dentro do prefixo). O IAM Access Analyzer não foi usado para validar as policies.
 - O `infra.yml` tem um job só: a aprovação acontece antes do plan ser visto. Separar `plan` e `apply` é melhoria pendente.
 - O `trivy-action` roda no job do `deploy.yml` que tem credenciais AWS temporárias, e o job `plan` do `ci.yml` executa HCL do próprio PR com a role de leitura.
 - A saída das tasks em 443 e 53 para `0.0.0.0/0` é necessária sem NAT, mas é ampla.
 - O SHA-256 do CA bundle da RDS foi medido uma vez localmente (a AWS não publica checksum).
+- O repositório é público e o account id aparece nos logs das Actions (via OIDC): considerar torná-lo privado ao final.
+- O hook local do gitleaks (`.pre-commit-config.yaml`) não existe; o gitleaks roda só no CI.
 
 **DR**
 - RPO e RTO são metas. Nenhum restore foi testado e o RTO de 30 a 60 minutos não foi medido.
 - Com a configuração atual de `dev`, o `destroy` apaga os dados e os backups automáticos ([`docs/dr.md`](docs/dr.md)).
-- Replicação entre regiões e snapshot entre contas: só documentados, por escopo e por custo. O tipo de cadastro da conta (avançado, Free plan) não os bloqueia. Não foi verificado se o Free plan os libera.
+- Replicação entre regiões e snapshot entre contas: só documentados, por escopo e por custo.
 
 **Não implementado**
-- Laboratório EKS: `infrastructure/eks-lab/`, `k8s/`, `eks-lab.yml` e a role `gha-eks-lab` não existem ([ADR 0007](docs/adr/0007-eks-somente-como-laboratorio-efemero.md)).
+- Laboratório EKS: `infrastructure/eks-lab/`, `k8s/`, `eks-lab.yml`, a branch `gitops` e a role `gha-eks-lab` não existem ([ADR 0007](docs/adr/0007-eks-somente-como-laboratorio-efemero.md)).
 - Notificação dos alarmes: o código cria três alarmes (crédito de CPU do RDS, espaço livre e respostas 5xx da API), mas `alarm_action_arns` é vazio por padrão, então nenhum alarme avisa ninguém.
 - Rotina de atualização do digest da imagem e das dependências (Dependabot ou Renovate): não decidida.
 
-**Valores `[PROPOSTA] a calibrar` no `dev.tfvars`:** throttling do estágio (50 req/s e burst 100), storage do RDS (20 GiB), retenção de logs (14 dias), TTL do registro SRV (10 s) e os limiares dos três alarmes.
+**Valores `[PROPOSTA] a calibrar` no `dev.tfvars`:** throttling do estágio (50 req/s e burst 100; limita os testes pelo API Gateway), storage do RDS (20 GiB), retenção de logs (14 dias), TTL do registro SRV (10 s) e os limiares dos três alarmes.
 
 **Divergências entre a steering e o código** (vale o código; nada foi alterado para bater com a documentação):
 - A steering fala numa flag `ingress_mode = "alb"` que não existe no código.
 - A estimativa da steering para 3 tasks via API Gateway assume throttling de 1.000 req/s no estágio; o `dev.tfvars` define 50.
-- A linha 43 de [`infrastructure/README.md`](infrastructure/README.md) ainda diz que o ADR da divergência "não foi escrito". Ele agora existe: [ADR 0012](docs/adr/0012-divergencia-da-arquitetura-alvo.md).
-
-**Informações que a steering lista como desconhecidas:** plano da conta (Free ou Paid), data de expiração dos créditos, versão do Kubernetes do lab e preço exato do RDS e dos nós Spot.
+- A estimativa de 500 req/s por task de 0,5 vCPU era conservadora: dentro da VPC a task sustentou 1.000 req/s sem erro.

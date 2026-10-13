@@ -40,7 +40,7 @@ A "arquitetura alvo" abaixo (ALB + NAT) é a do autor do desafio. A implementaç
 | Módulos `alb`, `target-group`, `listener`, `nat-gateway` | Instanciados | Mantidos no repositório e NÃO instanciados (alternativa futura) |
 | Regra de SG da task | Origem no ALB | Origem no SG do VPC Link, por chave simbólica (`sg_refs`) |
 
-Motivo: evitar o custo fixo do ALB e do NAT, conforme os guardrails de FinOps do projeto (`.kiro/steering/02-finops-guardrails.md`, que traz os preços com fonte). O ADR dessa decisão ainda não foi escrito (pendente).
+Motivo: evitar o custo fixo do ALB e do NAT, conforme os guardrails de FinOps do projeto (`.kiro/steering/02-finops-guardrails.md`, que traz os preços com fonte). A decisão está registrada no [ADR 0012](../docs/adr/0012-divergencia-da-arquitetura-alvo.md).
 
 ### Trade-off de `ignore_changes` e `skip_destroy`
 

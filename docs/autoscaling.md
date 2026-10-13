@@ -21,7 +21,7 @@ Rótulos: `[FATO: fonte]`, `[HIPÓTESE]` e `[PROPOSTA]`.
 
 A raiz passa ao módulo só `cluster_name`, `service_name`, `min_capacity` e `max_capacity` ([`main.tf`](../infrastructure/main.tf) linhas 349-356). O alvo de 60% e os cooldowns são os padrões do módulo. [FATO: arquivos citados]
 
-O alvo de 60% sobre uma task de 0,5 vCPU equivale a cerca de 0,3 vCPU de uso médio por task (cálculo: 0,6 × 0,5). Não existe medição que relacione 60% de CPU com requisições por segundo na AWS. [FATO: nenhum arquivo em `tests/load/results/` traz medição na AWS]
+O alvo de 60% sobre uma task de 0,5 vCPU equivale a cerca de 0,3 vCPU de uso médio por task (cálculo: 0,6 × 0,5). Medido na AWS em 13/10/2026 (dentro da VPC, 1 task, autoscaling suspenso, `/connect`): CPU média por minuto de 32% a 500 req/s, 63% a 1.000 req/s e 81% perto de 1.500 req/s, sem erro. Por interpolação de uma série por perfil, o alvo de 60% corresponde a cerca de 1.000 req/s por task [HIPÓTESE: 1 série por perfil, CPU com granularidade de 1 min]. [FATO: `tests/load/results/2026-10-13-aws-vpc.csv` e [`docs/performance/benchmark-aws.md`](performance/benchmark-aws.md)]
 
 ## Como o roteamento acompanha
 
@@ -71,7 +71,7 @@ Efeito prático: um pico que dure menos de uns 3 minutos pode passar inteiro sob
 - Pior caso durante um deploy, com `deployment_maximum_percent = 200`: 3 tasks × 2 × 3 conexões = 18. Com o lab EKS ligado, a steering soma (3 + 1) × 3 = 12, total 30. [FATO: cálculo da steering em [`01-arquitetura-e-restricoes.md`](../.kiro/steering/01-arquitetura-e-restricoes.md) seção "Conexões com o banco"; o termo de 18 foi reconferido neste turno com os valores do código]
 - A regra da steering é manter a soma no pior momento em até 50% de `max_connections`. O `max_connections` real do `db.t4g.micro` é **desconhecido**: a steering estima 80 a 110 e manda confirmar com `SHOW max_connections;`. Com 80 a 110, 50% dá 40 a 55 conexões, e 30 cabe. Com `max_connections` abaixo de 60, não cabe. [HIPÓTESE: depende do valor real, a verificar no RDS]
 - Cada conexão tem `connectionTimeoutMillis` de 2000 ms, `idleTimeoutMillis` de 10000 ms e `statement_timeout` e `query_timeout` de 3000 ms. [FATO: [`application/src/db.js`](../application/src/db.js) linhas 6-9]
-- O benchmark LOCAL usou pool de 5; a AWS usa 3. A folga por task segue grande no benchmark (cada consulta leva cerca de 1 ms), mas com 3 conexões o comportamento sob carga precisa ser revalidado. [FATO: [`08-testes-de-carga.md`](../.kiro/steering/08-testes-de-carga.md) regra de execução 6; [`01-arquitetura-e-restricoes.md`](../.kiro/steering/01-arquitetura-e-restricoes.md) seção "Conexões com o banco"]
+- O benchmark LOCAL usou pool de 5; a AWS usa 3. A folga por task segue grande no benchmark (cada consulta leva cerca de 1 ms), mas com 3 conexões o comportamento sob carga precisava ser revalidado. Na AWS, com 1 task e `DB_POOL_MAX=3`, as taxas de até 1.500 req/s (rampa) não geraram erro. O `max_connections` do RDS foi medido em 79 (13/10/2026), e 18 conexões no pior caso (3 tasks × 2 no deploy × 3) ficam abaixo de 50% disso. [FATO: [`08-testes-de-carga.md`](../.kiro/steering/08-testes-de-carga.md) regra de execução 6; [`01-arquitetura-e-restricoes.md`](../.kiro/steering/01-arquitetura-e-restricoes.md) seção "Conexões com o banco"]
 
 ## Custo do autoscaling
 
@@ -94,14 +94,14 @@ O service ignora `desired_count` e `task_definition` ([`modules/ecs/main.tf`](..
 
 ## O que não foi validado na AWS
 
-Nada deste plano foi executado na AWS. Está pendente:
+Foram medidos na AWS (13/10/2026) a CPU por task em função da taxa e o `max_connections`. A **reação do autoscaling continua sem medição** (ele ficou suspenso nos testes de capacidade). Está pendente:
 
 - Que o target tracking cria os alarmes e escala de 1 para 3 tasks e de volta, e em quanto tempo (a estimativa de 3 a 5 minutos é da steering).
 - O número real de períodos do alarme de scale-out e de scale-in.
-- A relação entre 60% de CPU e requisições por segundo numa task Fargate de 0,5 vCPU. Isso inclui saber se o Fargate aplica a cota de CPU com throttling igual ao cgroup local (item "DESCONHECIDO" da steering).
+- Se o Fargate aplica a cota de CPU com throttling igual ao cgroup local (item "DESCONHECIDO" da steering). A relação entre CPU e requisições por segundo já foi medida (acima), com 1 série por perfil.
 - Que a task nova entra no Cloud Map só depois de saudável, e que a saída de uma task remove o registro antes de o tráfego falhar.
 - Se o API Gateway faz cache do `DiscoverInstances` e quanto isso muda o custo.
-- O `max_connections` real do RDS `db.t4g.micro` e se 18 a 30 conexões no pior caso cabem.
+- (Resolvido) `max_connections` do RDS `db.t4g.micro` = 79; 18 conexões no pior caso do ECS cabem. O cenário com EKS não foi testado.
 - O comportamento durante um deploy com `deployment_maximum_percent = 200` junto de um evento de escala.
 - Quantos IPv4 públicos ficam cobrados com 3 tasks.
 
