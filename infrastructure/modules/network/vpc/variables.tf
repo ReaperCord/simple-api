@@ -4,7 +4,7 @@ variable "vpc_cidr_block" {
 }
 
 variable "tags" {
-  description = "Tags adicionais para o bucket"
+  description = "Tags adicionais para a VPC"
   type        = map(string)
   default     = {}
 }

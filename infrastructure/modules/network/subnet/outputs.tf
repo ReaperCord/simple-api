@@ -3,6 +3,11 @@ output "subnet_id" {
   value       = { for k, v in aws_subnet.this : k => v.id }
 }
 
+output "subnet_ids_ordered" {
+  description = "Lista dos IDs das subnets na mesma ordem de subnet_name."
+  value       = [for n in var.subnet_name : aws_subnet.this[n].id]
+}
+
 output "subnet_cidr_block" {
   description = "A map of the subnet CIDR blocks, keyed by the original for_each key."
   value       = { for k, v in aws_subnet.this : k => v.cidr_block }

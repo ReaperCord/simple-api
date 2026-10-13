@@ -20,7 +20,9 @@ resource "aws_route" "this" {
   destination_prefix_list_id = try(each.value.destination_prefix_list_id, null)
 
   # Alvo (use apenas 1 por rota)
-  gateway_id                = try(each.value.gateway_id, null) # IGW/VGW
+  # gateway_ref aponta para uma chave de var.ref_ids (ex: "igw"); o ID entra so no VALOR,
+  # as chaves do for_each vem do JSON (estaticas) e nunca de IDs desconhecidos no plan.
+  gateway_id                = try(var.ref_ids[each.value.gateway_ref], each.value.gateway_id, null) # IGW/VGW
   nat_gateway_id            = try(each.value.nat_gateway_id, null)
   transit_gateway_id        = try(each.value.transit_gateway_id, null)
   vpc_peering_connection_id = try(each.value.vpc_peering_connection_id, null)

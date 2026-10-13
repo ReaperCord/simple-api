@@ -15,8 +15,9 @@ variable "type" {
 }
 
 variable "value" {
-  description = "Valor do parâmetro"
+  description = "Valor do parâmetro (somente configuracao nao secreta)"
   type        = string
+  sensitive   = true
 }
 
 variable "tags" {
