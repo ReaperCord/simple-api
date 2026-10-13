@@ -27,6 +27,9 @@ COPY --chown=node:node src ./src
 RUN mkdir -m 0755 /certs
 COPY --from=rds-ca --chmod=0444 /rds-global-bundle.pem /certs/rds-global-bundle.pem
 ENV DB_SSL_CA_FILE=/certs/rds-global-bundle.pem
+# npm/npx nao sao usados em runtime (CMD chama node direto) e o npm embutido na base carrega CVEs HIGH
+# (brace-expansion, ip-address, tar, undici) que reprovam o trivy image. Remover reduz a superficie de ataque.
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
 # Justificativa do ignore: o usuario "node" ja existe na imagem base (uid 1000) e a spec exige USER node.
 # hadolint ignore=DL3066
 USER node
