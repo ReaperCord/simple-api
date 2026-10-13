@@ -1,0 +1,232 @@
+{
+  "name": "kxc-perf",
+  "description": "Escreve e executa testes de carga k6 e analisa capacidade (p50/p95/p99).",
+  "prompt": "file://../prompts/perf.md",
+  "tools": [
+    "read",
+    "write",
+    "shell",
+    "web"
+  ],
+  "permissions": {
+    "rules": [
+      {
+        "capability": "shell",
+        "effect": "deny",
+        "match": [
+          "*rm -rf*",
+          "*rm -fr*",
+          "*rm -r *",
+          "sudo *",
+          "*git push --force*",
+          "*git push -f*",
+          "*git reset --hard*",
+          "*git clean -f*",
+          "*--privileged*",
+          "*-v /:/*",
+          "find * -delete*",
+          "find * -exec*",
+          "find * -ok *"
+        ]
+      },
+      {
+        "capability": "shell",
+        "effect": "deny",
+        "match": [
+          "*-auto-approve*",
+          "*terraform*init*-migrate-state*",
+          "*terraform*show*-json*",
+          "*terraform*output*-json*",
+          "*terraform*output*-raw*",
+          "*terraform*state pull*",
+          "*terraform*state push*",
+          "*terraform*state rm*",
+          "*terraform*state mv*",
+          "*terraform*console*",
+          "*terraform*force-unlock*"
+        ]
+      },
+      {
+        "capability": "shell",
+        "effect": "deny",
+        "match": [
+          "aws *delete-*",
+          "aws *terminate-*",
+          "aws *s3 rm*",
+          "aws *s3 rb*",
+          "aws *iam*create-access-key*",
+          "aws *iam*create-user*",
+          "aws *iam*create-login-profile*",
+          "*AdministratorAccess*"
+        ]
+      },
+      {
+        "capability": "shell",
+        "effect": "deny",
+        "match": [
+          "*tfstate*",
+          "*secretsmanager*get-secret-value*",
+          "*ssm*--with-decryption*",
+          "*rds*generate-db-auth-token*",
+          "*ecr*get-login-password*",
+          "*sts*assume-role*",
+          "*sts*get-session-token*",
+          "*sts*get-federation-token*",
+          "*sso*get-role-credentials*",
+          "*configure*export-credentials*",
+          "aws configure get*",
+          "*.aws/credentials*",
+          "*.aws/sso/*",
+          "*.aws/cli/cache*",
+          "*.ssh/*",
+          "*.kube/config*",
+          "*.docker/config.json*",
+          "*AWS_SECRET_ACCESS_KEY*",
+          "*AWS_SESSION_TOKEN*",
+          "env",
+          "printenv*",
+          "set",
+          "export -p*",
+          "*/proc/*/environ*",
+          "*.env",
+          "*.env.local*",
+          "*.env.production*",
+          "*.pem*",
+          "*id_rsa*"
+        ]
+      },
+      {
+        "capability": "shell",
+        "effect": "deny",
+        "match": [
+          "gh api *-X*",
+          "gh api *--method*",
+          "gh api * -f *",
+          "gh api * -F *",
+          "gh api *--field*",
+          "gh api *--raw-field*",
+          "gh api *--input*",
+          "*npm audit fix --force*"
+        ]
+      },
+      {
+        "capability": "fs_read",
+        "effect": "deny",
+        "match": [
+          "**/*.tfstate",
+          "**/*.tfstate.*",
+          "**/.env",
+          "**/.env.*",
+          "**/*.pem",
+          "**/*.key",
+          "**/*credentials*",
+          "~/.aws/**",
+          "~/.ssh/**",
+          "~/.kube/**",
+          "~/.docker/config.json"
+        ],
+        "exclude": [
+          "**/.env.example"
+        ]
+      },
+      {
+        "capability": "fs_write",
+        "effect": "deny",
+        "match": [
+          "**/*.tfstate",
+          "**/*.tfstate.*",
+          "**/.env",
+          "**/.env.*",
+          "**/*.pem",
+          "**/*.key",
+          "**/*credentials*",
+          "~/.aws/**",
+          "~/.ssh/**",
+          "~/.kube/**",
+          "~/.docker/config.json",
+          ".kiro/steering/**",
+          ".kiro/agents/**",
+          ".kiro/prompts/**",
+          "AGENTS.md"
+        ],
+        "exclude": [
+          "**/.env.example"
+        ]
+      },
+      {
+        "capability": "shell",
+        "effect": "ask",
+        "match": [
+          "git commit*",
+          "git push*",
+          "git checkout -- *",
+          "git restore *",
+          "git stash drop*",
+          "git branch -D*",
+          "git rebase*"
+        ]
+      },
+      {
+        "capability": "fs_write",
+        "effect": "allow",
+        "match": [
+          "tests/load/**",
+          "docs/performance/**"
+        ]
+      },
+      {
+        "capability": "shell",
+        "effect": "allow",
+        "match": [
+          "git status*",
+          "git diff*",
+          "git log*",
+          "git show*",
+          "ls*",
+          "cat *",
+          "grep *",
+          "rg *",
+          "find *",
+          "head *",
+          "tail *",
+          "wc *",
+          "jq *",
+          "tree*",
+          "pwd",
+          "which *",
+          "file *",
+          "du *",
+          "sha256sum *",
+          "k6 version",
+          "k6 inspect *",
+          "python3 -m json.tool *"
+        ]
+      },
+      {
+        "capability": "shell",
+        "effect": "ask",
+        "match": [
+          "k6 run *",
+          "k6 cloud *"
+        ]
+      }
+    ]
+  },
+  "resources": [
+    "file://AGENTS.md",
+    "file://.kiro/steering/**/*.md",
+    "file://.kiro/prompts/_base.md"
+  ],
+  "hooks": [
+    {
+      "name": "contexto-git",
+      "trigger": "SessionStart",
+      "action": {
+        "type": "command",
+        "command": "git status --short && git log -1 --oneline"
+      }
+    }
+  ],
+  "includeMcpJson": false,
+  "welcomeMessage": "kxc-perf: k6 com confirmação; contra a AWS só com custo calculado e aprovação."
+}
