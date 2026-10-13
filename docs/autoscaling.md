@@ -51,7 +51,15 @@ flowchart LR
 
 ## Tempo de reação esperado: 3 a 5 minutos
 
-A estimativa de 3 a 5 minutos vem da steering ([`01-arquitetura-e-restricoes.md`](../.kiro/steering/01-arquitetura-e-restricoes.md) seção "Autoscaling") e é uma **estimativa a medir**, não um resultado. Ela soma três etapas:
+A estimativa de 3 a 5 minutos vem da steering ([`01-arquitetura-e-restricoes.md`](../.kiro/steering/01-arquitetura-e-restricoes.md) seção "Autoscaling"). **Medido na AWS em 13/10/2026** (spike de 100 para 1.500 req/s pelo API Gateway, uma execução; detalhes em [`performance/benchmark-aws.md`](performance/benchmark-aws.md), dados em `tests/load/results/2026-10-13-aws-spike*.`):
+
+- Do salto de carga (~22:50:05 UTC, estimado) até a decisão de scale-out 1 → 2: **~5 min** (22:55:05). A única task ficou com CPU de 95–98% de 22:51 a 22:54.
+- Da decisão até a task nova rodando: **~44 s** (22:55:49); a instância entrou no Cloud Map em ~31 s (22:55:38).
+- Segundo degrau 2 → 3 decidido 3 min depois (22:58:05), com 3 tasks rodando em 22:58:47. A CPU média caiu para 42% e depois 22%.
+- Scale-in: 3 → 2 às 23:16:07 (**~16 min depois do fim do spike**, 15 períodos de 1 min abaixo de 54%) e 2 → 1 às 23:22:07 (cooldown de 300 s). Total de ~22 min para voltar a 1 task.
+- Durante os ~5 min de saturação: p95 chegou a 290 ms num minuto e o erro a 0,03–0,17% por minuto; o scale-in 3 → 2 gerou 8 respostas 5xx. O p50 ficou em ~5 ms o tempo todo.
+
+Os alarmes criados pelo target tracking (`describe-alarms`): scale-out = 3 períodos de 1 min com CPU > 60%; scale-in = 15 períodos de 1 min com CPU < 54%. A tabela abaixo é a decomposição estimada antes da medição:
 
 | Etapa | O que acontece | Duração | Base |
 |---|---|---|---|
@@ -94,10 +102,10 @@ O service ignora `desired_count` e `task_definition` ([`modules/ecs/main.tf`](..
 
 ## O que não foi validado na AWS
 
-Foram medidos na AWS (13/10/2026) a CPU por task em função da taxa e o `max_connections`. A **reação do autoscaling continua sem medição** (ele ficou suspenso nos testes de capacidade). Está pendente:
+Foram medidos na AWS (13/10/2026) a CPU por task em função da taxa, o `max_connections` e a **reação do autoscaling** (spike, uma execução). Está pendente:
 
-- Que o target tracking cria os alarmes e escala de 1 para 3 tasks e de volta, e em quanto tempo (a estimativa de 3 a 5 minutos é da steering).
-- O número real de períodos do alarme de scale-out e de scale-in.
+- (Resolvido) O target tracking criou os alarmes e escalou de 1 para 3 tasks e de volta; tempos na seção "Tempo de reação". Falta repetir a medição para ter variação entre execuções.
+- (Resolvido) Períodos dos alarmes: 3 de 1 min (scale-out) e 15 de 1 min (scale-in).
 - Se o Fargate aplica a cota de CPU com throttling igual ao cgroup local (item "DESCONHECIDO" da steering). A relação entre CPU e requisições por segundo já foi medida (acima), com 1 série por perfil.
 - Que a task nova entra no Cloud Map só depois de saudável, e que a saída de uma task remove o registro antes de o tráfego falhar.
 - Se o API Gateway faz cache do `DiscoverInstances` e quanto isso muda o custo.

@@ -290,8 +290,8 @@ Estado em 13/10/2026: a stack foi criada na AWS e testada (resultados em [`docs/
 
 **Ainda não verificado**
 - Se o Cloud Map cobra `DiscoverInstances` por requisição: depende do Cost Explorer, que só mostra o custo no dia seguinte.
-- Autoscaling: o tempo de reação e de subida da task nova não foi medido (o autoscaling ficou suspenso nos testes de capacidade); só se mediu a CPU da task (~63% a 1.000 req/s). Os 3 a 5 minutos de [`docs/autoscaling.md`](docs/autoscaling.md) seguem estimativa.
-- Soak de 2 h, spike pelo API Gateway (exige elevar o throttling do estágio) e 3 séries por perfil (cada série usou a mesma task); throttling de CPU do Fargate não medido.
+- Autoscaling: medido em um spike (100 → 1.500 req/s pelo API Gateway): decisão de scale-out ~5 min depois do salto, task nova rodando ~44 s depois da decisão, 3 tasks em ~8,7 min e volta a 1 task ~22 min depois do fim do spike. Uma execução só; durante a saturação o p95 chegou a 290 ms e o erro a 0,17% num minuto ([`docs/autoscaling.md`](docs/autoscaling.md), [`docs/performance/benchmark-aws.md`](docs/performance/benchmark-aws.md)).
+- Soak de 2 h e 3 séries por perfil (cada série usou a mesma task); throttling de CPU do Fargate não medido. O spike foi feito com o throttling do estágio elevado temporariamente (restaurado em 50/100).
 - Rotação de 7 dias do segredo: a app invalida o cache em `28P01` (testado com cliente falso), mas uma rotação real não foi exercitada.
 - Conectividade das tasks até ECR, CloudWatch Logs e Secrets Manager por IP público, sem NAT nem endpoints: funcionou nos testes, sem análise de falhas.
 - Destroy completo e `tools/residual-check.sh` com exit 0 desta janela: ver o plano de execução.
@@ -316,7 +316,7 @@ Estado em 13/10/2026: a stack foi criada na AWS e testada (resultados em [`docs/
 - O hook local do gitleaks (`.pre-commit-config.yaml`) não existe; o gitleaks roda só no CI.
 
 **DR**
-- RPO e RTO são metas. Nenhum restore foi testado e o RTO de 30 a 60 minutos não foi medido.
+- Um restore PITR real foi testado (13/10/2026): pedido até instância `available` em 15,4 min e marcador verificado em 16,4 min; RPO observado de ~3 a 8 min (uma execução, banco quase vazio). O RTO total de um incidente (decisão, troca de endpoint, `terraform apply`) não foi medido; cópia entre regiões e snapshot entre contas não foram testados.
 - Com a configuração atual de `dev`, o `destroy` apaga os dados e os backups automáticos ([`docs/dr.md`](docs/dr.md)).
 - Replicação entre regiões e snapshot entre contas: só documentados, por escopo e por custo.
 
