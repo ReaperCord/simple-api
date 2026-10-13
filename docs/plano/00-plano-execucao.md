@@ -21,7 +21,7 @@ Regras fixas: sem commit/push/PR sem pedido; nunca `terraform -chdir` (usar `Set
 | 1 | Auditar a policy `gha-infra` contra os recursos que ainda faltam criar (service ECS, autoscaling, RDS, Cloud Map, alarmes, secret); inclui `ecs:DeregisterTaskDefinition` (2.1) e secret/KMS do RDS (2.4) | zero | — | **Concluído** (ver `01-wp1-auditoria-iam.md`): nenhum patch novo; 2.1 desnecessária por `skip_destroy = true` |
 | 2 | Completar o apply da stack via `infra.yml` (gate `infra`) | ~US$ 34/mês 24x7 | WP0, 5 itens de FinOps, OK no turno | **Concluído 13/10/2026**: run 38459253681, 17 added / 0 changed / 1 destroyed, sem AccessDenied (janela aberta ~20h UTC) |
 | 3 | Pós-apply: variable `API_URL`, smoke de `/`, `/health`, `/connect`, `deploy.yml` de ponta a ponta, evidências | baixo | WP2 | **Parcial**: `API_URL` criada; `/`, `/health`, `/connect` = 200; falta `deploy.yml` e evidências restantes |
-| 4 | Carga na AWS (dentro da VPC e pelo API Gateway); conferir cobrança do Cloud Map por `DiscoverInstances` | por requisição (calcular antes) | WP3 | Pendente |
+| 4 | Carga na AWS (dentro da VPC e pelo API Gateway); conferir cobrança do Cloud Map por `DiscoverInstances` | por requisição (calcular antes) | WP3 | **Concluído 13/10/2026**: parte A (API GW) e parte B (VPC) feitas; ver `docs/performance/benchmark-aws.md`; falta conferir Cloud Map no Cost Explorer (dia seguinte) |
 | 5 | Destroy + `residual-check.sh` (exit 0) ao fim de cada janela | zero | — | A cada janela |
 | 6 | README "Pendências", `infrastructure/README.md` linha 43 (ADR 0012), higiene (CRLF, alarmes sem destino), repo privado no fim | zero | Resultados reais | Pendente |
 | Opc. | Benchmark local (branch só no PC original) e lab EKS | — | — | Se sobrar tempo |
