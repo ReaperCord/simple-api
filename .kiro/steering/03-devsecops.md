@@ -30,7 +30,7 @@ Cada workflow que assume role roda num **GitHub environment próprio** (`deploy`
 
 Proibido: `"Action": "*"`, `"Resource": "*"` em ação que ACEITA restrição por ARN, `AdministratorAccess`, `iam:PassRole` com `Resource: "*"`, access keys de longo prazo no GitHub. As únicas exceções de `Resource: "*"` são as da tabela (a doc do ECS diz que task definitions não suportam permissão por recurso) — cada uma comentada na policy com o motivo.
 
-Toda policy nova: justificar cada `Action` em comentário ou no PR. Validar com `aws accessanalyzer validate-policy` quando possível (o IAM Access Analyzer não existe em conta aberta pelo cadastro novo sem os recursos avançados).
+Toda policy nova: justificar cada `Action` em comentário ou no PR. Validar com `aws accessanalyzer validate-policy` quando possível (a API do IAM Access Analyzer responde nesta conta: `list-analyzers` retornou 0 analisadores em 13/10/2026; `validate-policy` ainda não foi testada)
 
 ## Container
 

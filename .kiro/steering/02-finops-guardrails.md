@@ -12,7 +12,7 @@ Responda, por escrito, ANTES de pedir aprovação:
 2. Custo por hora e por mês de cada recurso novo, com a fonte (URL oficial) ou "a verificar"
 3. O que continua cobrando depois de `terraform destroy` (snapshots, log groups, imagens ECR, EIPs, volumes, zonas do Route 53)
 4. Por quanto tempo ficará ligado
-5. Se o serviço/tipo de instância é aceito na conta (o Free plan restringe; a conta aberta pelo cadastro novo também) — se o plano ainda é desconhecido, diga isso
+5. Se o serviço/tipo de instância é aceito na conta (a conta está no Free plan, que restringe serviços; a lista do que ele libera nesta conta ainda não foi verificada) — se não souber, diga isso
 
 Sem os 5 itens, não peça aprovação. Sem aprovação explícita NO TURNO, não execute. Por padrão o agente só tem credencial de leitura: a execução é feita pelo Leandro (que pode ativar um perfil de escrita e aprovar o comando no Kiro) ou pelo workflow `infra.yml` com aprovação.
 

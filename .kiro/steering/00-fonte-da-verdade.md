@@ -89,14 +89,13 @@ CPU da API limitada por cgroup (todas as threads do Node), Postgres 16 local com
 - Créditos: US$ 100 (confirmados no console em 11/10/2026). Até +US$ 100 por atividades no Explore AWS (US$ 20 cada: EC2, RDS, Lambda, Bedrock, Budgets).
 - Free plan: nunca cobra; só serviços/recursos selecionados; fecha em 6 meses ou ao zerar créditos; EC2 elegível (contas de 15/07/2025 em diante): t3.micro, t3.small, t4g.micro, t4g.small, c7i-flex.large, m7i-flex.large.
 - Paid plan: tudo liberado; cobra após os créditos.
-- Conta aberta pelo cadastro novo ("Sign up for AWS (new)", liberação limitada), nos DOIS planos, até "Activate advanced AWS features": sem recursos multi-região ou cross-região, e sem GuardDuty, IAM Access Analyzer, Organizations, IAM Identity Center, Security Hub e Trusted Advisor, entre outros. Fonte: docs.aws.amazon.com/accounts/latest/reference/supported-services-sign-up-new.html
+- Conta de cadastro AVANÇADO (sem project no AWS Settings; usuário root; todas as regiões padrão no console), plano FREE, ACTIVE, US$ 100,00 de crédito, expira em 2027-04-11. Fonte: `aws freetier get-account-plan-state` (perfil kxc-readonly, 13/10/2026) e print do console. As restrições da experiência nova ("Sign up for AWS (new)": região única por project, sem recursos cross-região, sem GuardDuty, IAM Access Analyzer, Organizations etc.) NÃO se aplicam a esta conta. A conta não é membro de nenhuma organização; entrar no AWS Organizations converte o Free plan em Paid automaticamente (docs.aws.amazon.com/awsaccountbilling/latest/aboutv2/free-tier-plans.html). GuardDuty não está ativado (`SubscriptionRequiredException`).
 - Teto pessoal: R$ 50. Gasto planejado: ~US$ 41 de crédito (meta ≤ US$ 45).
 
 ## DESCONHECIDO (não preencha com suposição)
 
-- **Plano da conta (Free ou Paid)** — decide tipos de nó do EKS e se a cobrança é possível
-- Como a conta foi aberta (cadastro novo ou avançado) — decide se GuardDuty e recursos cross-região existem
-- Data de expiração dos créditos e data de entrega do desafio
+- Data de entrega do desafio
+- Se o Free plan libera CRIAR ECS Fargate, RDS, API Gateway HTTP API, Cloud Map e EKS nesta conta. Leituras nesses serviços funcionam, mas a lista pública de serviços do Free plan só foi encontrada para a experiência nova. Como verificar: apply do bootstrap e um teste mínimo de Fargate e RDS antes da stack completa
 - Se o API Gateway faz cache do `DiscoverInstances` (impacta custo por requisição)
 - Se o Fargate aplica a cota de CPU com throttling igual ao cgroup local
 - `max_connections` real do RDS `db.t4g.micro`
