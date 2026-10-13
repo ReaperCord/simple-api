@@ -192,6 +192,7 @@ module "rds" {
   db_name                   = var.db_name
   master_username           = var.db_username
   allocated_storage         = var.db_allocated_storage
+  backup_retention_period   = var.db_backup_retention_period
   subnet_ids                = module.private_subnets.subnet_ids_ordered
   vpc_security_group_ids    = [module.sg_rds.security_group_id]
   deletion_protection       = var.db_deletion_protection

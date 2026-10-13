@@ -42,6 +42,17 @@ variable "max_allocated_storage" {
   default     = 0
 }
 
+variable "backup_retention_period" {
+  description = "Dias de retencao dos backups automaticos (PITR). Decisao do projeto: 7 (04-terraform.md). O Free plan limita este valor (FreeTierRestrictionError com 7); conta Free usa um valor menor via tfvars, documentado em ADR. 0 desliga o PITR."
+  type        = number
+  default     = 7
+
+  validation {
+    condition     = var.backup_retention_period >= 0 && var.backup_retention_period <= 35
+    error_message = "backup_retention_period deve estar entre 0 e 35 (limite do RDS)."
+  }
+}
+
 variable "subnet_ids" {
   description = "Subnets PRIVADAS (em pelo menos 2 AZs) do subnet group"
   type        = list(string)

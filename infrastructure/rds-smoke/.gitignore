@@ -1,0 +1,7 @@
+# Root efemero de verificacao: state LOCAL e nunca versionado (pode conter dados sensiveis).
+.terraform/
+.terraform.lock.hcl
+terraform.tfstate
+terraform.tfstate.*
+*.tfplan
+crash.log

@@ -84,5 +84,5 @@ A soma das conexões no PIOR momento (deploy com `maximumPercent=200` dobra as t
 
 ## DR
 
-- RPO na mesma região: ≤ 5 min (backups automáticos + PITR, retenção 7 dias). RTO alvo 30–60 min (restore PITR + `terraform apply`), a MEDIR num teste real.
+- RPO na mesma região: ≤ 5 min (backups automáticos + PITR, retenção 1 dia). RTO alvo 30–60 min (restore PITR + `terraform apply`), a MEDIR num teste real.
 - Outra região/conta: a mesma stack parametrizada (região e AZs por variável, `data.aws_availability_zones`), com o state separado. O RPO entre regiões depende do que for copiado para lá: replicação de backups automáticos (PITR na outra região, RPO de minutos, custo de armazenamento e transferência) ou cópia diária de snapshot (RPO até 24 h). Compartilhar snapshot com outra conta exige chave KMS gerenciada pelo cliente (a chave padrão não pode ser compartilhada). Documentado, não implementado, por escopo e custo. O tipo de cadastro da conta não bloqueia recursos cross-região, e não foi verificado se o Free plan os libera.
