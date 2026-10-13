@@ -81,6 +81,12 @@ db_name              = "simple_api"
 db_username          = "simple_api"
 db_allocated_storage = 20 # [PROPOSTA] a calibrar (GiB, gp3)
 
+# PITR: a decisao travada era 7 dias (04-terraform.md), mas o Free plan desta conta recusa 7
+# (FreeTierRestrictionError: "backup retention period exceeds the maximum available to free tier").
+# Testado em 2026-10-13 pelo root efemero infrastructure/rds-smoke: 7 falha, 1 cria o RDS.
+# Reduzido para 1 na conta Free (PITR de 1 dia); documentado em ADR.
+db_backup_retention_period = 1
+
 # Decisao documentada: a stack e destruida apos cada janela de avaliacao; um snapshot final
 # geraria custo residual. Para manter o dado, use deletion_protection = true e
 # skip_final_snapshot = false com db_final_snapshot_identifier.

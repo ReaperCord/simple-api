@@ -212,6 +212,12 @@ variable "db_allocated_storage" {
   type        = number
 }
 
+variable "db_backup_retention_period" {
+  description = "Dias de retencao do PITR do RDS. Decisao do projeto: 7 (04-terraform.md), mas o Free plan recusa 7 (FreeTierRestrictionError); nesta conta Free use o maximo aceito, documentado em ADR."
+  type        = number
+  default     = 7
+}
+
 variable "db_deletion_protection" {
   description = "Protecao contra exclusao do RDS (explicita; false porque a stack e destruida apos cada janela de avaliacao)"
   type        = bool

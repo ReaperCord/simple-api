@@ -29,7 +29,7 @@ resource "aws_db_instance" "this" {
   publicly_accessible    = false
   multi_az               = false
 
-  backup_retention_period = 7
+  backup_retention_period = var.backup_retention_period
   copy_tags_to_snapshot   = true
 
   # Decisao documentada (plano-implementacao.md, decisao 13): explicitos, sem depender do default.

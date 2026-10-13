@@ -3,7 +3,8 @@
 ## Contexto
 
 - O desafio pede RPO e RTO e um plano para recriar o ambiente em outra região ou conta. [FATO: [`00-fonte-da-verdade.md`](../../.kiro/steering/00-fonte-da-verdade.md) seção "Requisitos obrigatórios do desafio", item 5]
-- O RDS tem `backup_retention_period = 7`, o que liga os backups automáticos e o restore para um ponto no tempo (PITR). [FATO: [`modules/rds/main.tf`](../../infrastructure/modules/rds/main.tf) linha 32]
+- O RDS tem `backup_retention_period = var.backup_retention_period`, o que liga os backups automáticos e o restore para um ponto no tempo (PITR). O valor é parametrizado, com default `7` (arquitetura alvo). [FATO: [`modules/rds/main.tf`](../../infrastructure/modules/rds/main.tf) linha 31 e [`modules/rds/variables.tf`](../../infrastructure/modules/rds/variables.tf)]
+- **Restrição do Free plan**: esta conta recusa `backup_retention_period = 7` na criação (`FreeTierRestrictionError`); com `1` o RDS é criado. Verificado em 2026-10-13 pelo root efêmero [`infrastructure/rds-smoke/`](../../infrastructure/rds-smoke/). Por isso o `dev` usa retenção de **1 dia** (`db_backup_retention_period = 1`), e a janela de PITR na conta Free fica reduzida a 1 dia. [FATO: `terraform apply` com 7 (recusado) e com 1 (criado), 2026-10-13]
 - A AWS envia os logs de transação do RDS ao S3 a cada cinco minutos. O restore para um ponto no tempo cria uma **nova** instância e não altera a original. [FATO: https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_PIT.html, aberta em 13/10/2026]
 - A replicação de backups automáticos para outra região copia snapshots e logs de transação. Há cobrança de transferência e de armazenamento no destino. [FATO: https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_ReplicateBackups.html, aberta em 13/10/2026]
 - Snapshot cifrado com a chave KMS padrão não pode ser compartilhado com outra conta. [FATO: [`00-fonte-da-verdade.md`](../../.kiro/steering/00-fonte-da-verdade.md) seção "Fatos de serviços AWS"]
@@ -12,7 +13,7 @@
 
 ## Decisão
 
-- Na mesma região: RPO alvo de até 5 minutos e RTO alvo de 30 a 60 minutos, por backups automáticos com retenção de 7 dias, restore PITR e `terraform apply`. O RTO é uma **meta a medir** num teste real. Não há medição.
+- Na mesma região: RPO alvo de até 5 minutos e RTO alvo de 30 a 60 minutos, por backups automáticos, restore PITR e `terraform apply`. A retenção dos backups define a janela máxima de PITR: a arquitetura alvo pede 7 dias, mas na conta Free o valor aplicado é **1 dia** (o Free plan recusa 7), então o PITR nessa conta cobre apenas as últimas 24 h. O RTO é uma **meta a medir** num teste real. Não há medição.
 - Em outra região ou conta: recriar a mesma stack, parametrizada por região, com state separado, e restaurar o banco a partir do que tiver sido copiado. O RPO entre regiões depende da cópia escolhida.
 - Isto é **documentado e não implementado**. O procedimento está em [`docs/dr.md`](../dr.md).
 

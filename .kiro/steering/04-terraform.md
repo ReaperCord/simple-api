@@ -20,7 +20,7 @@ fileMatchPattern: ["infrastructure/**/*.tf", "infrastructure/**/*.tfvars", "infr
 11. Task definition: o Terraform cria a revisão inicial; o pipeline publica as seguintes. No service, `lifecycle { ignore_changes = [task_definition, desired_count] }`. DOCUMENTE o trade-off (mudança de env var via Terraform não faz deploy sozinha).
 12. ECS service: `deployment_circuit_breaker { enable = true, rollback = true }`; `service_registries` com `registry_arn`, `container_name` e `container_port` (registro SRV — exigido pela integração do API Gateway); `healthCheck` do container na task definition.
 13. VPC Link V2 é imutável: mudar subnets/SGs recria o link. Defina-os uma vez e avise antes de um plan que o substitua.
-14. RDS: `publicly_accessible = false`, `storage_encrypted = true`, `backup_retention_period = 7`, `manage_master_user_password = true`, `deletion_protection` e `skip_final_snapshot` explícitos (decisão documentada). Chave KMS padrão (sem custo); DR em outra conta exigiria chave gerenciada pelo cliente (~US$ 1/mês), porque snapshot com a chave padrão não pode ser compartilhado — documentado, não implementado.
+14. RDS: `publicly_accessible = false`, `storage_encrypted = true`, `backup_retention_period = 1`, `manage_master_user_password = true`, `deletion_protection` e `skip_final_snapshot` explícitos (decisão documentada). Chave KMS padrão (sem custo); DR em outra conta exigiria chave gerenciada pelo cliente (~US$ 1/mês), porque snapshot com a chave padrão não pode ser compartilhado — documentado, não implementado.
 15. API Gateway: estágio `$default` com throttling; integração do ECS com `overwrite:path` = `$request.path` (em integração privada o nome do estágio iria no caminho do backend).
 
 ## Anti-alucinação específica de Terraform
