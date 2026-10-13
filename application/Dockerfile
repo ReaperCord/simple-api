@@ -22,6 +22,9 @@ WORKDIR /app
 COPY --from=deps --chown=node:node /app/node_modules ./node_modules
 COPY --chown=node:node package.json ./
 COPY --chown=node:node src ./src
+# O diretorio e criado antes com 0755: o COPY --chmod aplica o modo tambem ao diretorio de destino que ele
+# cria (resultaria em dr--r--r--, sem bit de execucao, e o usuario node nao conseguiria ler o bundle).
+RUN mkdir -m 0755 /certs
 COPY --from=rds-ca --chmod=0444 /rds-global-bundle.pem /certs/rds-global-bundle.pem
 ENV DB_SSL_CA_FILE=/certs/rds-global-bundle.pem
 # Justificativa do ignore: o usuario "node" ja existe na imagem base (uid 1000) e a spec exige USER node.
