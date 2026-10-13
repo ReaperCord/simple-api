@@ -15,7 +15,7 @@ fileMatchPattern: ["infrastructure/**/*.tf", "infrastructure/**/*.tfvars", "infr
 6. Provider com `default_tags` (ver `02-finops-guardrails.md`).
 7. Nada de AZ, região, account ID ou ARN hardcoded. Use `var.region`, `data.aws_availability_zones`, `data.aws_caller_identity`. Corrigir o default de `azs` do módulo `route-table` (F-INF-7).
 8. VPC com `enable_dns_hostnames = true` e `enable_dns_support = true` (F-INF-9). Subnet module passando a usar `map_public_ip_on_launch` (true nas públicas — F-INF-8).
-9. Placeholders dos JSONs de `config/`: resolver com `templatefile()` na composição raiz. O `${ALB_SG_ID}` de `rules-sg-ecs.json` vira `${INGRESS_SG_ID}` (SG do VPC Link); porta 8084 → 3000; adicionar egress 5432 para o SG do RDS.
+9. Regras de SG em `config/security_rules/*.json` usam chaves simbólicas (`rule_key`, `sg_refs`) e NÃO IDs. O módulo `security-group` recebe o mapa `sg_ids` (chave simbólica → ID) e resolve o ID no atributo da regra, nunca na chave do `for_each`. `templatefile()` só vale para valores já conhecidos no plan.
 10. Variáveis e outputs sensíveis: `sensitive = true`.
 11. Task definition: o Terraform cria a revisão inicial; o pipeline publica as seguintes. No service, `lifecycle { ignore_changes = [task_definition, desired_count] }`. DOCUMENTE o trade-off (mudança de env var via Terraform não faz deploy sozinha).
 12. ECS service: `deployment_circuit_breaker { enable = true, rollback = true }`; `service_registries` com `registry_arn`, `container_name` e `container_port` (registro SRV — exigido pela integração do API Gateway); `healthCheck` do container na task definition.

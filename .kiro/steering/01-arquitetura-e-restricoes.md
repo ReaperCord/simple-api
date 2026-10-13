@@ -30,7 +30,7 @@ Caminho no backend: em integrações privadas o API Gateway inclui o nome do est
 - `modules/network/nat-gateway` e a rota de `config/routes/private.json` → não instanciar. Subnets privadas (RDS) ficam só com a rota local.
 - `modules/network/alb`, `target-group`, `listener` e `config/security_rules/rules-sg-alb.json` → sem uso (mantidos para uma eventual flag `ingress_mode = "alb"`, documentada como alternativa).
 - A "arquitetura alvo" do `infrastructure/README.md` (ALB + NAT) é do autor do desafio; a nossa diverge de propósito e isso vai em ADR.
-- Placeholder `${ALB_SG_ID}` em `rules-sg-ecs.json`: a origem real é o SG do VPC Link. Renomear para `${INGRESS_SG_ID}` e documentar.
+- Placeholder `${ALB_SG_ID}` em `rules-sg-ecs.json`: a origem real é o SG do VPC Link. Substituído por chaves simbólicas (`sg_refs: ["vpclink"]`), resolvidas pelo módulo `security-group` via mapa `sg_ids` (ver regra 9 de `04-terraform.md`); `templatefile()` com `${INGRESS_SG_ID}` não funciona porque o ID do SG é desconhecido no plan.
 
 ## Trilha EKS — laboratório efêmero
 
