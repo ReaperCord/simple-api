@@ -59,8 +59,52 @@ Leitura:
 
 Limites desta parte: 1 série por perfil (a regra pede 3; cada série não usou task nova da API); CPU da API só com granularidade de 1 min; throttling de CPU do Fargate não medido; `dropped_iterations` pequenos (até 69 de ~120 mil) sem como separar limite do gerador de limite da API.
 
+## Parte C: spike pelo API Gateway com autoscaling ligado (cliente em us-east-1)
+
+**Rótulo: AWS.** Gerador: task Fargate x86 2 vCPU / 4 GB com `grafana/k6:2.2.0` na mesma região (CPU média 7,8%, pico 28%, lida de `/proc/stat`), chamando a URL pública do API Gateway (`/connect`). Autoscaling **ligado** (min 1, max 3, alvo 60%). O throttling do estágio ficou em 3.000/5.000 durante o teste e foi restaurado para 50/100 (verificado). Script: `tests/load/aws-spike/spike.js`. Dados: `tests/load/results/2026-10-13-aws-spike.csv` (por minuto), `…-aws-spike-raw.json` e `…-aws-spike-monitor.csv` (tasks, Cloud Map e alarmes a cada ~5 s).
+
+Perfil: 100 req/s por 60 s, salto para 1.500 req/s em 10 s mantido por 10 min, depois 100 req/s por 20 min. Total: 1.040.473 requisições; 418 respostas 5xx (0,040%); 0 respostas 429; 1.526 iterações descartadas.
+
+Linha do tempo (UTC; o início do salto, ~22:50:05, é estimado pelo primeiro log do k6, com ±5 s):
+
+| Hora | Evento | Fonte |
+|---|---|---|
+| ~22:50:05 | Salto para 1.500 req/s | k6 (estimado) |
+| 22:51 a 22:54 | CPU da única task em 95–98% (saturada) | `AWS/ECS CPUUtilization` |
+| **22:55:05** | **Scale-out 1 → 2** decidido (`AlarmHigh`), ~5 min depois do salto | `describe-scaling-activities` |
+| 22:55:38 | 2ª instância registrada no Cloud Map | monitor |
+| **22:55:49** | **2 tasks rodando** (~44 s depois da decisão) | monitor |
+| 22:58:05 | Scale-out 2 → 3 decidido (~3 min depois do primeiro) | `describe-scaling-activities` |
+| 22:58:47 | 3 tasks rodando e 3 instâncias no Cloud Map | monitor |
+| 22:59 a 23:00 | CPU média cai para 42% e 22% | `AWS/ECS` |
+| ~23:00:15 | Fim do spike (volta a 100 req/s) | k6 (estimado) |
+| **23:16:07** | **Scale-in 3 → 2** (`AlarmLow`, 15 períodos de 1 min abaixo de 54%) | `describe-scaling-activities` |
+| **23:22:07** | **Scale-in 2 → 1** (6 min depois, cooldown de 300 s) | `describe-scaling-activities` |
+
+Latência e erros via API Gateway (cliente em us-east-1), por minuto (completo no CSV):
+
+| Janela (UTC) | O que acontecia | p50 | p95 | p99 | Erro |
+|---|---|---|---|---|---|
+| 22:49 | base, 100 req/s | 5,2 ms | 9,3 ms | 56 ms | 0 |
+| 22:50 a 22:52 | 1.500 req/s, 1 task saturando | 4,9–5,0 ms | 23–33 ms | 60–85 ms | 0,03–0,06% |
+| **22:53** | **1 task saturada** | 5,5 ms | **290 ms** | **321 ms** | **0,17%** |
+| 22:55 a 22:56 | scale-out em curso | 4,7–4,9 ms | 6,3–32 ms | 16–184 ms | 0,00–0,07% |
+| 22:59 | 3ª task entrando | 4,7 ms | 13 ms | **757 ms** | 0 |
+| 23:01 a 23:20 | cauda, 100 req/s | 5,7–6,0 ms | 7,6–7,9 ms | 12–15 ms | 0 (exceto 23:16) |
+| **23:16** | **scale-in 3 → 2** | 5,8 ms | 7,7 ms | 12,5 ms | 0,15% (8 respostas 5xx) |
+
+SLO "via API GW, cliente em us-east-1" (p50 ≤ 25, p95 ≤ 75, p99 ≤ 200 ms, erro < 0,1%): o **p50 passou em todos os minutos**; o p95 estourou só em 22:53; o p99 estourou em 22:53 e 22:59; o erro passou de 0,1% em 22:53 (0,17%), 23:00 (0,11%) e 23:16 (0,15%). A 100 req/s o SLO é cumprido com folga (p99 12–15 ms).
+
+Leitura:
+- Uma única task a 1.500 req/s satura (CPU 95–98%) por ~4–5 min, até o scale-out, mas mantém p50 de ~5 ms; o estrago é no p95/p99 e em 0,03–0,17% de erro por minuto.
+- O scale-out leva **~5 min do salto à decisão** e **~44 s** da decisão até a task nova rodando; o segundo degrau ocorre ~3 min depois. O scale-in completo (3 → 1) leva **~22 min depois do fim do spike**.
+- O scale-in 3 → 2 gerou 8 respostas 5xx num minuto (indício de requisições para a task que sai; **causa não verificada**).
+- A coincidência do p99 de 757 ms (22:59) com a entrada da 3ª task é uma hipótese, não verificada.
+
+Limites: uma única execução; início do salto estimado (±5 s); CPU só com granularidade de 1 min; o monitor amostra a cada ~5 s. Custo: ~1,04 milhão de requisições × US$ 1/milhão ≈ US$ 1,04 (Cloud Map por requisição: a verificar amanhã no Cost Explorer).
+
 ## O que isto NÃO mostra
 
 - Não valida o SLO "via API GW, cliente em us-east-1" (p50 ≤ 25 ms): o cliente está no Brasil. A latência da app (≈ 1 ms) e a da rede (~130 ms) estão separadas acima.
-- Pela parte A, capacidade e autoscaling: ficaram de fora (limite de 50 req/s do throttling); a parte B acima cobre capacidade dentro da VPC. A reação do autoscaling continua **estimada** (`docs/autoscaling.md`).
+- Pela parte A, capacidade e autoscaling: ficaram de fora (limite de 50 req/s do throttling); a parte B acima cobre capacidade dentro da VPC. A reação do autoscaling foi medida na parte C (acima).
 - Se o Cloud Map cobra por `DiscoverInstances`: a verificar no Cost Explorer (dados de custo só no dia seguinte).

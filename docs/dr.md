@@ -1,6 +1,6 @@
 # Recuperação de desastre (DR)
 
-**Este plano é documentado e não foi implementado nem testado.** Nenhum backup, restore, cópia entre regiões ou recriação em outra conta foi executado. RPO e RTO abaixo são metas e hipóteses de desenho. O RTO em particular é uma **meta a medir** num teste real; não existe medição.
+**Este plano é documentado.** Foi testado **um** restore PITR na mesma região (seção "Teste realizado em 13/10/2026", abaixo). Cópia entre regiões, snapshot entre contas e recriação em outra conta **não** foram executados. RPO e RTO das demais linhas são metas e hipóteses de desenho.
 
 Rótulos: `[FATO: fonte]`, `[HIPÓTESE]` e `[PROPOSTA]`. A decisão de fundo está no [ADR 0011](adr/0011-dr-via-pitr.md).
 
@@ -8,7 +8,7 @@ Rótulos: `[FATO: fonte]`, `[HIPÓTESE]` e `[PROPOSTA]`. A decisão de fundo est
 
 | Cenário | RPO | RTO | Como | Estado |
 |---|---|---|---|---|
-| Erro lógico ou corrupção, instância viva, mesma região | Meta de até 5 min | Meta de 30 a 60 min, a medir | PITR para nova instância e troca de endpoint | Documentado |
+| Erro lógico ou corrupção, instância viva, mesma região | Meta de até 5 min (observado ~3 a 8 min, 1 execução) | Meta de 30 a 60 min; restore até banco verificado medido em 16,4 min (1 execução; sem decisão, troca de endpoint e apply) | PITR para nova instância e troca de endpoint | Restore testado; troca de endpoint não |
 | Perda da instância RDS, mesma região | Depende de existir backup (ver "Atenção ao destroy") | Meta de 30 a 60 min, a medir | Restore de backup automático retido ou de snapshot, mais `terraform apply` | Documentado. Sem backup retido com a configuração atual de `dev` |
 | Perda da região | Minutos (replicação de backups automáticos) ou até 24 h (cópia diária de snapshot) | A medir | Recriar a stack noutra região a partir do que foi copiado | Documentado. Não suportado na conta atual sem recursos avançados |
 | Recriação em outra conta | Depende da cópia compartilhada | A medir | Snapshot compartilhado com chave KMS gerenciada pelo cliente | Documentado. Chave padrão não permite |
@@ -21,7 +21,7 @@ Rótulos: `[FATO: fonte]`, `[HIPÓTESE]` e `[PROPOSTA]`. A decisão de fundo est
 - A AWS envia os logs de transação do RDS ao S3 a cada cinco minutos, e o restore para um ponto no tempo aceita qualquer instante dentro da retenção. [FATO: https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_PIT.html, aberta em 13/10/2026]
 - Disso segue a meta de RPO de até 5 minutos. O valor real num incidente é a diferença entre o momento do incidente e o campo `LatestRestorableTime` da instância. [HIPÓTESE: o intervalo real de entrega dos logs pode variar; medir `LatestRestorableTime` antes de tratar 5 minutos como garantia]
 
-### RTO: meta de 30 a 60 minutos, a medir
+### RTO: meta de 30 a 60 minutos (restore medido em 16,4 min)
 
 A meta vem da steering ([`01-arquitetura-e-restricoes.md`](../.kiro/steering/01-arquitetura-e-restricoes.md) seção "DR"). Ela soma tempos que não foram medidos:
 
@@ -32,6 +32,26 @@ A meta vem da steering ([`01-arquitetura-e-restricoes.md`](../.kiro/steering/01-
 | Trocar o endpoint na aplicação | Ver passo a passo. Pode exigir deploy |
 | `terraform apply` | Tempo de criação do RDS e do restante. Não medido |
 | Verificação (`GET /connect` = 200) | Segundos |
+
+## Teste realizado em 13/10/2026 (restore PITR, mesma região)
+
+[FATO: registro com horários em `tests/load/results/2026-10-13-aws-dr-restore-log.txt`] Foi feito **um** restore PITR real do RDS `simple-api-dev-db` (`db.t4g.micro`, retenção de 1 dia) para uma instância nova na mesma VPC, subnet group e SG, não pública. O Free plan aceitou o restore.
+
+| Passo | Medida |
+|---|---|
+| Marcador gravado no banco (tabela `dr_marker`) | 23:25:14 UTC |
+| `LatestRestorableTime` passar do marcador | até 473 s depois (limite superior: polling a cada 20 s e o campo avança em passos) |
+| Defasagem de `LatestRestorableTime` para o relógio, numa consulta | 192 s (~3,2 min) |
+| Pedido do restore → instância `available` | **924 s (15,4 min)** |
+| Pedido → marcador verificado na instância restaurada | **986 s (16,4 min)** |
+| Verificação (task efêmera, TLS `verify-full`, mesmo segredo) | 62 s; retornou o marcador (`id` 1, `note` "pre-restore"), `pg_is_in_recovery() = false` |
+| Apagar a instância restaurada (`--skip-final-snapshot --delete-automated-backups`) | 93 s |
+
+Leitura:
+- A parte "restore PITR até um banco acessível e verificado" levou **~16,4 min**, dentro da meta de 30 a 60 min. O RTO total de um incidente soma ainda a decisão do ponto no tempo, a troca do endpoint na aplicação (pode exigir deploy) e o `terraform apply`, que **não foram medidos**.
+- O RPO observado fica na faixa de **~3 a 8 min** neste teste (uma execução); a meta de 5 min **não é garantia**: o ponto restaurável só ultrapassou o marcador depois de até ~7,9 min.
+- O restore usou o último ponto restaurável, não um instante escolhido. Não foram testados restore a partir de snapshot, outra região nem outra conta.
+- Limites: uma execução, banco praticamente vazio (o tempo de restore cresce com o volume de dados) e retenção de 1 dia (o PITR cobre só as últimas 24 h).
 
 ## Atenção ao destroy
 

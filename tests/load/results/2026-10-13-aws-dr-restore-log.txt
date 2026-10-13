@@ -1,0 +1,17 @@
+
+23:24:58  [1] gravando marcador no banco de origem (simple-api-dev-db)
+23:25:53      exit=0 MARK {"id":1,"ts":"2026-10-13T23:25:14.750Z"}
+23:25:53      marcador gravado em 23:25:14Z (relogio do banco)
+23:25:53  [2] esperando LatestRestorableTime passar do marcador
+23:33:07      LatestRestorableTime=23:29:56Z (defasagem para agora: 192 s); marcador -> restauravel em 473 s
+23:33:09  [3] restore-db-instance-to-point-in-time -> simple-api-dev-db-restore (pedido)
+23:33:13      simple-api-dev-db-restore	creating
+23:33:30      primeiro status visto: creating (+21 s)
+23:48:33  [3] restaurada: status available apos 924 s (15,4 min) do pedido
+23:48:33  [4] verificando marcador na instancia restaurada
+23:49:35      exit=0 VERIFY {"ultimo":{"id":1,"ts":"2026-10-13T23:25:14.750Z","note":"pre-restore"},"linhas":1,"recovery":false} (task de verificacao: 62 s)
+23:49:35  [RTO] pedido -> available: 924 s; pedido -> marcador verificado: 986 s
+23:49:35  [5] apagando simple-api-dev-db-restore (skip-final-snapshot, delete-automated-backups)
+23:49:37      deleting
+23:51:09      apagada em 93 s
+23:51:09  DONE
