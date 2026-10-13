@@ -90,3 +90,27 @@ module "oidc" {
   ecs_service_name   = local.name
   task_role_names    = ["${local.name}-ecs-exec", "${local.name}-ecs-task"]
 }
+
+# ---------------------------------------------------------------------------------------------
+# Resource Group para observar tudo do projeto no console da AWS (Resource Groups & Tag Editor).
+# Gratuito. Consulta por tag: agrupa bootstrap e stack (Project = project_name) e acompanha os
+# recursos que a stack criar ou destruir, sem depender de apply do pipeline.
+# ---------------------------------------------------------------------------------------------
+resource "aws_resourcegroups_group" "project" {
+  name = "kxc-${var.project_name}-RG"
+  # A API aceita so [\sa-zA-Z0-9_.-] na descricao (sem acento, virgula, igual ou parenteses).
+  description = "Todos os recursos do projeto ${var.project_name} - tag Project - bootstrap e stack"
+
+  resource_query {
+    type = "TAG_FILTERS_1_0"
+    query = jsonencode({
+      ResourceTypeFilters = ["AWS::AllSupported"]
+      TagFilters = [
+        {
+          Key    = "Project"
+          Values = [var.project_name]
+        }
+      ]
+    })
+  }
+}
