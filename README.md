@@ -6,7 +6,7 @@
 
 Repositório do Desafio Técnico KXC (Arquiteto de Cloud AWS). Uma API em Node.js que consulta um PostgreSQL, empacotada em container e provisionada na AWS por Terraform, com pipeline de CI/CD no GitHub Actions.
 
-**Estado em 13/10/2026:** o código da aplicação, o Terraform e os workflows estão escritos e passam nas verificações locais e de CI que não precisam de credencial. **Nada foi aplicado na AWS.** Não existe `plan` com backend real, recurso criado nem número de desempenho medido na AWS. A seção [Pendências](#pendências) lista o que não foi verificado.
+**Estado em 13/10/2026:** o código da aplicação, o Terraform e os workflows estão escritos e passam nas verificações locais e nos jobs de CI do PR #1 que não precisam de credencial (app, sast, dockerfile, iac, secrets e workflows ficaram verdes; o job `plan` foi pulado porque o state em S3 ainda não existe). **Nada foi aplicado na AWS.** Não existe `plan` com backend real, recurso criado nem número de desempenho medido na AWS. A seção [Pendências](#pendências) lista o que não foi verificado.
 
 Rótulos usados nos documentos: `[FATO: fonte]` foi lido no repositório ou numa fonte citada, `[HIPÓTESE]` é inferência não confirmada, `[PROPOSTA]` é recomendação.
 
@@ -289,9 +289,9 @@ O que **não** foi verificado, com a razão:
 - Conectividade das tasks até ECR, CloudWatch Logs e Secrets Manager por IP público, sem NAT nem endpoints.
 
 **Build e testes**
-- Build `linux/arm64` local: o builder local não tem QEMU. O CI declara um build arm64 sem push ([`ci.yml`](.github/workflows/ci.yml) linhas 112-119) e o `deploy.yml` publica `linux/amd64,linux/arm64` com QEMU e buildx ([`deploy.yml`](.github/workflows/deploy.yml) linhas 69-89), mas a imagem arm64 nunca rodou aqui nem na AWS. Também não foi verificado se `TRIVY_PLATFORM` chega ao scan arm64 do `deploy.yml`.
-- Testes no container Node 24 não foram reexecutados ao escrever este README (daemon do Docker desligado). Os resultados citados vêm da última execução registrada.
-- Semgrep, hadolint, Trivy e gitleaks não foram reexecutados neste turno.
+- Build `linux/arm64`: **verificado no CI**. O job `dockerfile` do PR #1 passou, inclusive o passo "Build arm64 (plataforma de producao, sem push)" com QEMU e buildx ([`ci.yml`](.github/workflows/ci.yml) linhas 95-120). O build arm64 local não é possível, porque o builder do Docker Desktop não tem QEMU. O `deploy.yml` publica `linux/amd64,linux/arm64` ([`deploy.yml`](.github/workflows/deploy.yml) linhas 69-89) e esse caminho ainda não rodou. A imagem arm64 nunca executou numa task Fargate. Também não foi verificado se `TRIVY_PLATFORM` chega ao scan arm64 do `deploy.yml`.
+- Os testes no container Node 24 citados aqui vêm da última execução registrada (48 testes: 44 passam, 4 de integração ignorados, 0 falham).
+- Semgrep, hadolint, Trivy e gitleaks passaram no CI do PR #1 e não foram reexecutados ao escrever este README.
 
 **Desempenho**
 - Nenhum benchmark na AWS. Os números de [`docs/performance/benchmark-local.md`](docs/performance/benchmark-local.md) são LOCAIS (VM x86, Node 22, pool de 5, Postgres sem TLS).
@@ -301,7 +301,7 @@ O que **não** foi verificado, com a razão:
 **Segurança**
 - A API é pública e sem autenticação (contrato do desafio).
 - A aplicação usa o usuário master do banco. Um usuário só com `CONNECT` é pendência documentada.
-- A role `gha-infra` cria roles e policies com prefixo `simple-api-*` com conteúdo livre (escalada dentro do prefixo). O IAM Access Analyzer não existe na conta sem os recursos avançados.
+- A role `gha-infra` cria roles e policies com prefixo `simple-api-*` com conteúdo livre (escalada dentro do prefixo). O IAM Access Analyzer não foi usado para validar as policies, e não foi verificado se o Free plan o libera.
 - O `infra.yml` tem um job só: a aprovação acontece antes do plan ser visto. Separar `plan` e `apply` é melhoria pendente.
 - O `trivy-action` roda no job do `deploy.yml` que tem credenciais AWS temporárias, e o job `plan` do `ci.yml` executa HCL do próprio PR com a role de leitura.
 - A saída das tasks em 443 e 53 para `0.0.0.0/0` é necessária sem NAT, mas é ampla.
@@ -310,7 +310,7 @@ O que **não** foi verificado, com a razão:
 **DR**
 - RPO e RTO são metas. Nenhum restore foi testado e o RTO de 30 a 60 minutos não foi medido.
 - Com a configuração atual de `dev`, o `destroy` apaga os dados e os backups automáticos ([`docs/dr.md`](docs/dr.md)).
-- Replicação entre regiões e snapshot entre contas: só documentados, e a conta aberta pelo cadastro novo não os suporta sem os recursos avançados.
+- Replicação entre regiões e snapshot entre contas: só documentados, por escopo e por custo. O tipo de cadastro da conta (avançado, Free plan) não os bloqueia. Não foi verificado se o Free plan os libera.
 
 **Não implementado**
 - Laboratório EKS: `infrastructure/eks-lab/`, `k8s/`, `eks-lab.yml` e a role `gha-eks-lab` não existem ([ADR 0007](docs/adr/0007-eks-somente-como-laboratorio-efemero.md)).

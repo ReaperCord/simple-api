@@ -7,7 +7,7 @@
 - A AWS envia os logs de transação do RDS ao S3 a cada cinco minutos. O restore para um ponto no tempo cria uma **nova** instância e não altera a original. [FATO: https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_PIT.html, aberta em 13/10/2026]
 - A replicação de backups automáticos para outra região copia snapshots e logs de transação. Há cobrança de transferência e de armazenamento no destino. [FATO: https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_ReplicateBackups.html, aberta em 13/10/2026]
 - Snapshot cifrado com a chave KMS padrão não pode ser compartilhado com outra conta. [FATO: [`00-fonte-da-verdade.md`](../../.kiro/steering/00-fonte-da-verdade.md) seção "Fatos de serviços AWS"]
-- Conta aberta pelo cadastro novo não suporta recursos multi-região ou cross-região até a ativação dos recursos avançados. [FATO: [`00-fonte-da-verdade.md`](../../.kiro/steering/00-fonte-da-verdade.md) seção "Conta AWS e orçamento"]
+- A conta é de cadastro avançado e está no Free plan, então a restrição de recursos multi-região da experiência nova **não se aplica**. Não foi verificado se o Free plan libera replicação de backups ou cópia de snapshot entre regiões. [FATO: ver "Limitações da conta" em [`docs/dr.md`](../dr.md)]
 - No `dev` o RDS tem `skip_final_snapshot = true` e `deletion_protection = false`. O módulo não define `delete_automated_backups`, e o padrão do provider na versão fixada é `true`. [FATO: [`dev.tfvars`](../../infrastructure/environments/dev.tfvars) linhas 87-88, [`modules/rds/main.tf`](../../infrastructure/modules/rds/main.tf) e a doc do `aws_db_instance` v6.68.0, https://raw.githubusercontent.com/hashicorp/terraform-provider-aws/v6.68.0/website/docs/r/db_instance.html.markdown, argumento `delete_automated_backups`]
 
 ## Decisão
@@ -21,8 +21,8 @@
 | Alternativa | RPO | Custo | Motivo |
 |---|---|---|---|
 | RDS Multi-AZ | **A verificar**. Cobre falha de AZ, não é DR entre regiões | **A verificar**; a steering diz que dobra o custo | Proibida sem pedido explícito. Alta disponibilidade não é o requisito |
-| Replicação de backups automáticos entre regiões | Minutos (PITR no destino) | Transferência e armazenamento no destino, **a verificar** | Não suportada em conta aberta pelo cadastro novo sem recursos avançados. Não implementada |
-| Cópia diária de snapshot entre regiões | Até 24 h | Armazenamento do snapshot copiado, **a verificar** | Mesma restrição de conta. Não implementada |
+| Replicação de backups automáticos entre regiões | Minutos (PITR no destino) | Transferência e armazenamento no destino, **a verificar** | Fora do escopo e do orçamento. Não verificado se o Free plan a libera. Não implementada |
+| Cópia diária de snapshot entre regiões | Até 24 h | Armazenamento do snapshot copiado, **a verificar** | Mesmo motivo (escopo e custo). Não implementada |
 | Snapshot compartilhado com outra conta | Depende da frequência | Chave KMS gerenciada pelo cliente, cerca de US$ 1/mês, **a verificar** | A chave padrão não compartilha. Não implementada |
 | Réplica de leitura entre regiões ou Aurora Global | **A verificar** | **A verificar** | Proibidos pela steering (réplicas, Aurora) |
 
