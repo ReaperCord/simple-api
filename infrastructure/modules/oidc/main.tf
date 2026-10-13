@@ -617,9 +617,11 @@ data "aws_iam_policy_document" "infra_iam_state" {
   }
 
   statement {
-    sid       = "EcrReadRepository"
-    effect    = "Allow"
-    actions   = ["ecr:DescribeRepositories", "ecr:ListTagsForResource"] # data.aws_ecr_repository (a stack nao cria o repositorio)
+    sid    = "EcrReadRepository"
+    effect = "Allow"
+    # data.aws_ecr_repository: o provider aws 6.x tambem chama DescribeImages ao ler o repositorio
+    # (a stack nao cria o repositorio, so o referencia). Restrito ao ARN do repo (least-privilege).
+    actions   = ["ecr:DescribeRepositories", "ecr:ListTagsForResource", "ecr:DescribeImages"]
     resources = [var.ecr_repository_arn]
   }
 
