@@ -291,7 +291,8 @@ jobs:
   plan:
     name: plan (terraform plan com state em S3)
     # Sem fork (nunca recebe id-token) e so quando a variavel da role existir.
-    if: ${{ github.event.pull_request.head.repo.full_name == github.repository && vars.AWS_PLAN_ROLE_ARN != '' }}
+    # Secret nao pode ser lido em if de job; a variable PLAN_ENABLED e o gate. O ARN em si fica em secret.
+    if: ${{ github.event.pull_request.head.repo.full_name == github.repository && vars.PLAN_ENABLED == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -308,7 +309,7 @@ jobs:
       - name: Credenciais AWS via OIDC (gha-plan)
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
-          role-to-assume: ${{ vars.AWS_PLAN_ROLE_ARN }}
+          role-to-assume: ${{ secrets.AWS_PLAN_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
 
       - name: Terraform
@@ -320,8 +321,8 @@ jobs:
       - name: terraform init (backend S3)
         working-directory: infrastructure
         env:
-          TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
-          TF_STATE_KEY: ${{ vars.TF_STATE_KEY }}
+          TF_STATE_BUCKET: ${{ secrets.TF_STATE_BUCKET }}
+          TF_STATE_KEY: ${{ secrets.TF_STATE_KEY }}
           AWS_REGION_VAR: ${{ vars.AWS_REGION }}
         run: |
           terraform init -input=false -lockfile=readonly \

@@ -27,7 +27,7 @@ Expor a aplicação por API Gateway HTTP API (estágio `$default`, throttling no
 - O custo passa a depender do volume: US$ 1,00 por milhão de requisições. Se a integração com o Cloud Map chamar `DiscoverInstances` a cada requisição, a steering estima US$ 2,00 por milhão. [HIPÓTESE: a doc da AWS não diz se há cache da descoberta; verificar no Cost Explorer após o primeiro teste de carga pelo API Gateway]
 - O estágio aplica throttling. Com 50 req/s no `dev`, testes de carga e o spike precisam elevar o limite temporariamente, senão o que se mede é o 429. [FATO: [`02-finops-guardrails.md`](../../.kiro/steering/02-finops-guardrails.md) seção "Testes de carga e custo"]
 - A API é pública e sem autenticação (contrato do desafio). O API Gateway é a única proteção, via throttling. [FATO: [`docker-compose.yml`](../../docker-compose.yml) linhas 4-5]
-- Nada disso foi aplicado na AWS. O CI roda `terraform fmt`, `validate` e `test` sem credenciais, e o job `plan` só roda quando a variável `AWS_PLAN_ROLE_ARN` existe, o que depende do bootstrap. Não há `plan` nem `apply` real. [FATO: [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) linhas 130-170 e 291-294; ver [Pendências no README](../../README.md#pendências)]
+- Nada disso foi aplicado na AWS. O CI roda `terraform fmt`, `validate` e `test` sem credenciais, e o job `plan` só roda quando a variável `PLAN_ENABLED` é `true` (o ARN da role fica num secret, que não pode ser lido no `if` de um job), o que depende do bootstrap. Não há `plan` nem `apply` real. [FATO: [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) linhas 130-170 e 291-294; ver [Pendências no README](../../README.md#pendências)]
 
 ## Status
 
