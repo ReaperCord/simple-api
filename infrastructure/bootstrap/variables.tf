@@ -43,6 +43,16 @@ variable "github_repo" {
   default     = "simple-api"
 }
 
+variable "github_owner_id" {
+  description = "ID numerico do dono do repositorio (claim repository_owner_id); compoe o sub imutavel do OIDC. Publico na API do GitHub, sem default"
+  type        = string
+}
+
+variable "github_repo_id" {
+  description = "ID numerico do repositorio (claim repository_id); compoe o sub imutavel do OIDC. Publico na API do GitHub, sem default"
+  type        = string
+}
+
 variable "budget_emails" {
   description = "E-mails que recebem os alertas do AWS Budgets; sem default para nao versionar PII (placeholder <EMAIL> no exemplo)"
   type        = list(string)

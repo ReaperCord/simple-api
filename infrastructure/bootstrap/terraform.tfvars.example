@@ -8,6 +8,10 @@ ttl          = "none"
 
 github_owner = "<GITHUB_OWNER>"
 github_repo  = "simple-api"
+# IDs numericos do owner e do repo (claims repository_owner_id e repository_id do OIDC).
+# Publicos: gh api users/<owner> --jq .id  e  gh api repos/<owner>/<repo> --jq .id
+github_owner_id = "<GITHUB_OWNER_ID>"
+github_repo_id  = "<GITHUB_REPO_ID>"
 
 budget_emails = ["<EMAIL>"]
 
