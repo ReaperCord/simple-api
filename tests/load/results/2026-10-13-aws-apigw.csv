@@ -1,0 +1,5 @@
+data,rotulo,perfil,serie,rotas,taxa_req_s,duracao_s,requisicoes,p50_ms,p95_ms,p99_ms,max_ms,erro_pct,dropped_iterations,status_429,status_5xx,cpu_gerador_media_pct,cpu_gerador_max_pct,imagem,task,replicas
+2026-10-13,AWS,smoke,1,"/,/connect",5,60,301,153.919,199.267,210.373,276.069,0,0,0,0,19.9,50,"sha256:b78f973d (task def simple-api-dev:2)",0.5 vCPU / 1 GB ARM64,1
+2026-10-13,AWS,baseline,1,"/connect",40,300,12000,134.159,153.426,182.753,5000.126,0.008,0,0,0,17.8,63,"sha256:b78f973d (task def simple-api-dev:2)",0.5 vCPU / 1 GB ARM64,1
+2026-10-13,AWS,baseline,2,"/connect",40,300,12001,131.855,153.92,185.946,979.306,0.008,0,0,1,18.4,83,"sha256:b78f973d (task def simple-api-dev:2)",0.5 vCPU / 1 GB ARM64,1
+2026-10-13,AWS,baseline,3,"/connect",40,300,12001,134.077,164.706,210.037,752.661,0,0,0,0,24.1,80,"sha256:b78f973d (task def simple-api-dev:2)",0.5 vCPU / 1 GB ARM64,1

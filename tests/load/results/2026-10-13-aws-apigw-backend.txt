@@ -1,0 +1,14 @@
+Latencia medida DENTRO da task (campo duration_ms do log JSON da app), rotulo AWS.
+Consulta CloudWatch Logs Insights em /ecs/simple-api-dev, janela 2026-10-13 20:50Z ate o fim das series,
+filtro: path = '/connect' and status = 200
+Comando: fields duration_ms | filter ... | stats count(*), pct(duration_ms,50), pct(duration_ms,95), pct(duration_ms,99), max(duration_ms)
+
+n        34973
+p50 ms   0.9647
+p95 ms   1.1183
+p99 ms   5.769
+max ms   308.9358
+
+Ressalva: o k6 enviou ~37.350 requisicoes a /connect (3 x 12.000 + 3 x ~400 de aquecimento + ~150 do smoke);
+o Logs Insights contou 34.973 com status 200 na janela. A janela comeca depois do smoke (~150) e o resto
+da diferenca (~2.000) NAO foi reconciliado (atraso de ingestao, aquecimento ou perda). Tratar como a verificar.

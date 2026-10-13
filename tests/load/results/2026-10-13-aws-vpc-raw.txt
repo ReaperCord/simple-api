@@ -1,0 +1,10 @@
+Saida bruta do k6 (handleSummary) lida do CloudWatch Logs.
+
+# load: stream loadgen/k6/fe58612bf7a345fea49ba52c19a346fa
+RESULT {"profile":"steps","duration_ms":730003,"steps":[{"taxa_req_s":125,"reqs":22501,"p50":1.353314,"p95":1.715865,"p99":5.252134,"max":266.541828,"erro_pct":0,"dropped":0},{"taxa_req_s":250,"reqs":45000,"p50":1.186046,"p95":1.5222383499999999,"p99":4.516133580000011,"max":114.677944,"erro_pct":0,"dropped":0},{"taxa_req_s":375,"reqs":67492,"p50":1.1011145,"p95":1.4564059,"p99":6.199421099999985,"max":315.157732,"erro_pct":0,"dropped":9},{"taxa_req_s":500,"reqs":90001,"p50":1.062392,"p95":1.405998,"p99":6.841662,"max":161.114298,"erro_pct":0,"dropped":0}]}
+
+# breakpoint: stream loadgen/k6/1ef7133638424b42b915b6122d8c8a19
+RESULT {"profile":"breakpoint","duration_ms":600002,"steps":[],"total":{"reqs":479628,"p50":1.058063,"p95":1.9486970999999988,"p99":54.41812001999881,"max":497.801247,"erro_pct":0,"dropped":367,"aborted":false,"taxa_estimada_no_fim_req_s":1500}}
+
+# stress: stream loadgen/k6/ee5133cf991e4547b34fba118ca906b4
+RESULT {"profile":"steps","duration_ms":610004,"steps":[{"taxa_req_s":500,"reqs":59983,"p50":0.973872,"p95":1.1942978,"p99":5.813529,"max":250.677953,"erro_pct":0,"dropped":18},{"taxa_req_s":625,"reqs":74986,"p50":0.9493005,"p95":1.23576775,"p99":8.040195799999863,"max":201.695942,"erro_pct":0,"dropped":15},{"taxa_req_s":750,"reqs":89979,"p50":0.942753,"p95":1.2594145999999988,"p99":7.106363420000004,"max":189.427718,"erro_pct":0,"dropped":22},{"taxa_req_s":875,"reqs":104937,"p50":0.927731,"p95":1.2574537999999988,"p99":13.234011399999986,"max":224.703803,"erro_pct":0,"dropped":64},{"taxa_req_s":1000,"reqs":119932,"p50":0.9408434999999999,"p95":1.4025169499999997,"p99":7.898002610000049,"max":188.768229,"erro_pct":0,"dropped":69}]}
