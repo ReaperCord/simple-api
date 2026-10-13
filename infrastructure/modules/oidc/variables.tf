@@ -18,6 +18,26 @@ variable "github_repo" {
   }
 }
 
+variable "github_owner_id" {
+  description = "ID numerico do dono do repositorio GitHub (claim repository_owner_id). Compoe o sub imutavel de repos criados apos 15/07/2026. Publico na API do GitHub"
+  type        = string
+
+  validation {
+    condition     = can(regex("^[0-9]+$", var.github_owner_id))
+    error_message = "github_owner_id so aceita digitos."
+  }
+}
+
+variable "github_repo_id" {
+  description = "ID numerico do repositorio GitHub (claim repository_id). Compoe o sub imutavel. Publico na API do GitHub"
+  type        = string
+
+  validation {
+    condition     = can(regex("^[0-9]+$", var.github_repo_id))
+    error_message = "github_repo_id so aceita digitos."
+  }
+}
+
 variable "project_name" {
   description = "Prefixo dos recursos do projeto; limita o IAM do gha-infra a role/<project>-* e policy/<project>-*"
   type        = string

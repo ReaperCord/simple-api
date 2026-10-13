@@ -79,6 +79,8 @@ module "oidc" {
 
   github_owner       = var.github_owner
   github_repo        = var.github_repo
+  github_owner_id    = var.github_owner_id
+  github_repo_id     = var.github_repo_id
   project_name       = var.project_name
   region             = var.region
   state_bucket_name  = aws_s3_bucket.state.bucket

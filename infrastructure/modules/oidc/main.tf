@@ -6,18 +6,31 @@ locals {
   partition  = data.aws_partition.current.partition
   account_id = data.aws_caller_identity.current.account_id
 
-  # Claim sub EXATA de cada role (03-devsecops.md). Sem curingas: cada workflow roda num
+  # Claim sub de cada role (03-devsecops.md). Sem curingas no contexto: cada workflow roda num
   # environment proprio do GitHub, entao um nao consegue assumir a role do outro.
   # NAO existe gha-eks-lab aqui: o root eks-lab esta fora do escopo desta fase.
-  github_sub_prefix = "repo:${var.github_owner}/${var.github_repo}"
+  #
+  # Dois formatos de sub por role (lista fechada, sem curinga):
+  #  - por NOME: repo:OWNER/REPO:<contexto>            (repos criados ate 15/07/2026)
+  #  - IMUTAVEL: repo:OWNER@OWNER-ID/REPO@REPO-ID:<ctx> (repos criados apos 15/07/2026; este fork)
+  # Fonte: https://docs.github.com/actions/reference/security/oidc#immutable-subject-claims
+  # O separador @ nao aparece em nome de usuario nem de repo, entao StringLike aqui nao abre curinga real.
+  github_sub_prefix_name      = "repo:${var.github_owner}/${var.github_repo}"
+  github_sub_prefix_immutable = "repo:${var.github_owner}@${var.github_owner_id}/${var.github_repo}@${var.github_repo_id}"
+  role_contexts = {
+    "gha-plan"   = "pull_request"
+    "gha-deploy" = "environment:deploy"
+    "gha-infra"  = "environment:infra"
+  }
   role_subjects = {
-    "gha-plan"   = "${local.github_sub_prefix}:pull_request"
-    "gha-deploy" = "${local.github_sub_prefix}:environment:deploy"
-    "gha-infra"  = "${local.github_sub_prefix}:environment:infra"
+    for role, ctx in local.role_contexts : role => [
+      "${local.github_sub_prefix_name}:${ctx}",
+      "${local.github_sub_prefix_immutable}:${ctx}",
+    ]
   }
 
   trust_policies = {
-    for role, sub in local.role_subjects : role => jsonencode({
+    for role, subs in local.role_subjects : role => jsonencode({
       Version = "2012-10-17"
       Statement = [
         {
@@ -27,7 +40,10 @@ locals {
           Condition = {
             StringEquals = {
               "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
-              "token.actions.githubusercontent.com:sub" = sub
+            }
+            # StringLike porque sao dois valores fechados (nome e imutavel); nenhum traz curinga.
+            StringLike = {
+              "token.actions.githubusercontent.com:sub" = subs
             }
           }
         }
