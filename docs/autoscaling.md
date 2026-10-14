@@ -65,7 +65,7 @@ Os alarmes criados pelo target tracking (`describe-alarms`): scale-out = 3 perí
 |---|---|---|---|
 | 1. Detecção | O Application Auto Scaling cria e gerencia os alarmes do CloudWatch do target tracking. O alarme de scale-out precisa de alguns minutos de métrica acima do alvo antes de disparar | Alguns minutos. O número exato de períodos **a verificar** | Steering e a doc do Application Auto Scaling, que diz que o serviço cria e gerencia esses alarmes e que eles não devem ser editados |
 | 2. Subida da task | O Fargate baixa a imagem do ECR, inicia o container e o `healthCheck` passa a responder | Cerca de 1 minuto, segundo a steering. **Não medido** | Steering. O `startPeriod` de 15 s é carência, não duração do start |
-| 3. Roteamento | O registro SRV tem TTL de 10 s e o API Gateway consulta o Cloud Map | Segundos. **Não se sabe** se o API Gateway faz cache do `DiscoverInstances` | Lista "DESCONHECIDO" de [`00-fonte-da-verdade.md`](../.kiro/steering/00-fonte-da-verdade.md) |
+| 3. Roteamento | O registro SRV tem TTL de 10 s e o API Gateway consulta o Cloud Map | Segundos. O custo do Cloud Map (72.921 chamadas para 1.078.187 requisições, ~1 por 15) indica que o API Gateway **não** chama `DiscoverInstances` a cada requisição, o que é consistente com cache ou agrupamento; o mecanismo **não foi verificado** | Lista "DESCONHECIDO" de [`00-fonte-da-verdade.md`](../.kiro/steering/00-fonte-da-verdade.md) |
 
 Fonte do comportamento dos alarmes e do cooldown padrão de 300 s para serviços ECS: https://docs.aws.amazon.com/autoscaling/application/userguide/target-tracking-scaling-policy-overview.html, aberta em 13/10/2026.
 
@@ -84,7 +84,7 @@ Efeito prático: um pico que dure menos de uns 3 minutos pode passar inteiro sob
 ## Custo do autoscaling
 
 - Cada task extra custa o Fargate ARM64 (0,5 vCPU e 1 GB: US$ 0,01975/h, cálculo sobre a tabela de preços da steering, ver [ADR 0003](adr/0003-ecs-fargate-arm64-0-5-vcpu-1-gb.md)) mais um IPv4 público a US$ 0,005/h ([ADR 0005](adr/0005-sem-nat-tasks-em-subnet-publica.md)). Somando, US$ 0,02475/h por task adicional (cálculo: 0,01975 + 0,005). [FATO: [`02-finops-guardrails.md`](../.kiro/steering/02-finops-guardrails.md) seção "Preços de referência"]
-- Duas tasks adicionais por 1 hora custam, portanto, cerca de US$ 0,0495 (cálculo: 2 × 0,02475). O custo de cada consulta ao Cloud Map (US$ 1,00 por milhão de chamadas) depende de o API Gateway fazer cache da descoberta. **A verificar** no Cost Explorer.
+- Duas tasks adicionais por 1 hora custam, portanto, cerca de US$ 0,0495 (cálculo: 2 × 0,02475). O custo de cada consulta ao Cloud Map (US$ 1,00 por milhão de chamadas) foi medido: 72.921 chamadas = US$ 0,073 para 1.078.187 requisições (ver [`plano/05-custo-real.md`](plano/05-custo-real.md)).
 
 ## Interação com o throttling do API Gateway
 
@@ -108,7 +108,7 @@ Foram medidos na AWS (13/10/2026) a CPU por task em função da taxa, o `max_con
 - (Resolvido) Períodos dos alarmes: 3 de 1 min (scale-out) e 15 de 1 min (scale-in).
 - Se o Fargate aplica a cota de CPU com throttling igual ao cgroup local (item "DESCONHECIDO" da steering). A relação entre CPU e requisições por segundo já foi medida (acima), com 1 série por perfil.
 - Que a task nova entra no Cloud Map só depois de saudável, e que a saída de uma task remove o registro antes de o tráfego falhar.
-- Se o API Gateway faz cache do `DiscoverInstances` e quanto isso muda o custo.
+- (Medido) Custo do Cloud Map: ~1 chamada por 15 requisições do API Gateway; o mecanismo de cache não foi verificado.
 - (Resolvido) `max_connections` do RDS `db.t4g.micro` = 79; 18 conexões no pior caso do ECS cabem. O cenário com EKS não foi testado.
 - O comportamento durante um deploy com `deployment_maximum_percent = 200` junto de um evento de escala.
 - Quantos IPv4 públicos ficam cobrados com 3 tasks.
@@ -118,5 +118,5 @@ Foram medidos na AWS (13/10/2026) a CPU por task em função da taxa, o `max_con
 1. Subir o limite de throttling do estágio acima da carga do teste.
 2. Rodar o spike descrito em [`08-testes-de-carga.md`](../.kiro/steering/08-testes-de-carga.md), registrando CPU média, contagem de tasks e SLO antes, durante e depois da escala.
 3. Ler `aws application-autoscaling describe-scaling-activities` para obter os horários reais de cada etapa.
-4. Conferir no Cost Explorer a linha do Cloud Map.
+4. (Feito em 14/10) Linha do Cloud Map no Cost Explorer: ver [`plano/05-custo-real.md`](plano/05-custo-real.md).
 5. Rodar `SHOW max_connections;` no RDS e comparar com a conta de conexões.
