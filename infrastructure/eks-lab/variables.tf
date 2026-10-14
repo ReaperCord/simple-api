@@ -91,7 +91,10 @@ variable "addon_versions" {
     "coredns"                = "v1.14.7-eksbuild.11"
     "kube-proxy"             = "v1.36.0-eksbuild.45"
     "eks-pod-identity-agent" = "v1.4.0-eksbuild.4"
-    "metrics-server"         = "v0.9.0-eksbuild.12"
+    # NAO usar v0.9.x: corrompe o /openapi/v2 agregado (protobuf da 503) e quebra o Argo CD e a validacao de `kind: List`.
+    # Visto na janela 3 (131 chaves ArbitraryKeys/SchemaProps no /openapi/v2) e descrito em
+    # https://github.com/kubernetes-sigs/metrics-server/issues/1868 (aberto em 14/10/2026).
+    "metrics-server" = "v0.8.1-eksbuild.21"
   }
 }
 

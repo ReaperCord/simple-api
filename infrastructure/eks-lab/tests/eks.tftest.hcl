@@ -116,8 +116,13 @@ run "addons_fixados_incluindo_metrics_server_e_pod_identity" {
   }
 
   assert {
-    condition     = aws_eks_addon.metrics_server.addon_version == "v0.9.0-eksbuild.12"
+    condition     = aws_eks_addon.metrics_server.addon_version == "v0.8.1-eksbuild.21"
     error_message = "A versao do metrics-server deve vir fixada de var.addon_versions."
+  }
+
+  assert {
+    condition     = !startswith(aws_eks_addon.metrics_server.addon_version, "v0.9.")
+    error_message = "metrics-server v0.9.x corrompe o /openapi/v2 agregado (metrics-server#1868) e quebra o Argo CD."
   }
 }
 
