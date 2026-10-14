@@ -101,10 +101,10 @@ Leitura:
 - O scale-in 3 → 2 gerou 8 respostas 5xx num minuto (indício de requisições para a task que sai; **causa não verificada**).
 - A coincidência do p99 de 757 ms (22:59) com a entrada da 3ª task é uma hipótese, não verificada.
 
-Limites: uma única execução; início do salto estimado (±5 s); CPU só com granularidade de 1 min; o monitor amostra a cada ~5 s. Custo: ~1,04 milhão de requisições × US$ 1/milhão ≈ US$ 1,04 (Cloud Map por requisição: a verificar amanhã no Cost Explorer).
+Limites: uma única execução; início do salto estimado (±5 s); CPU só com granularidade de 1 min; o monitor amostra a cada ~5 s. Custo real (Cost Explorer, `docs/plano/05-custo-real.md`): o dia inteiro somou 1.078.187 requisições no API Gateway = US$ 1,078 (todas as partes, não só o spike) e US$ 0,073 de Cloud Map (72.921 chamadas).
 
 ## O que isto NÃO mostra
 
 - Não valida o SLO "via API GW, cliente em us-east-1" (p50 ≤ 25 ms): o cliente está no Brasil. A latência da app (≈ 1 ms) e a da rede (~130 ms) estão separadas acima.
 - Pela parte A, capacidade e autoscaling: ficaram de fora (limite de 50 req/s do throttling); a parte B acima cobre capacidade dentro da VPC. A reação do autoscaling foi medida na parte C (acima).
-- Se o Cloud Map cobra por `DiscoverInstances`: a verificar no Cost Explorer (dados de custo só no dia seguinte).
+- (Resolvido) Cloud Map: 72.921 chamadas de API (US$ 0,073) para 1.078.187 requisições, ~1 por 15; ver `docs/plano/05-custo-real.md`.

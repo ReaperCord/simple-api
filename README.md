@@ -241,7 +241,7 @@ Só entram números da tabela de preços de [`02-finops-guardrails.md`](.kiro/st
 | Fargate ARM64, 1 task de 0,5 vCPU e 1 GB | US$ 0,03238/vCPU-h e US$ 0,00356/GB-h, ou US$ 0,01975/h | US$ 14,42 (cálculo) | aws.amazon.com/fargate/pricing |
 | IPv4 público, 1 por task | US$ 0,005/h | US$ 3,65 por IP (cálculo) | aws.amazon.com/vpc/pricing |
 | API Gateway HTTP API | US$ 1,00 por milhão de requisições (primeiros 300 milhões) | Depende do volume | aws.amazon.com/api-gateway/pricing |
-| Cloud Map | US$ 0,10 por recurso registrado/mês e US$ 1,00 por milhão de chamadas de descoberta | Depende do volume e de cache **a verificar** | aws.amazon.com/cloud-map/pricing |
+| Cloud Map | US$ 0,10 por recurso registrado/mês e US$ 1,00 por milhão de chamadas de descoberta | Medido em 13/10: 72.921 chamadas para 1.078.187 requisições do API Gateway, ~1 por 15 requisições (ver [`docs/plano/05-custo-real.md`](docs/plano/05-custo-real.md)) | aws.amazon.com/cloud-map/pricing |
 | Zona privada do Route 53 | US$ 0,50/mês | US$ 0,50 | tabela da steering |
 | RDS `db.t4g.micro` on-demand | ~US$ 0,016/h, **aproximado** | ~US$ 11,68 (cálculo sobre valor aproximado) | Pricing Calculator, a confirmar |
 | AWS Budgets sem ações | Gratuito | US$ 0 | aws.amazon.com/aws-cost-management/aws-budgets/pricing |
@@ -290,7 +290,7 @@ Estado em 13/10/2026 (fim da janela): a stack foi criada na AWS, testada e **des
 - Carga na AWS, rotulada AWS e separada da LOCAL: pelo API Gateway (smoke e baseline a 40 req/s) e dentro da VPC (load até 500, stress até 1.000 e rampa até 1.500 req/s, sem erro; o breakpoint não foi atingido). Detalhes, ressalvas e dados em `tests/load/results/`.
 
 **Ainda não verificado**
-- Se o Cloud Map cobra `DiscoverInstances` por requisição: depende do Cost Explorer, que só mostra o custo no dia seguinte.
+- (Resolvido em 14/10) Custo real da janela e Cloud Map: uso bruto de US$ 1,454 em 13/10, coberto por crédito (saldo US$ 138,52). O Cloud Map cobra por chamada de API, mas foram ~1 chamada por 15 requisições do API Gateway (+6,8% sobre o custo do API Gateway), não uma por requisição; o mecanismo (cache) não foi verificado. Ver [`docs/plano/05-custo-real.md`](docs/plano/05-custo-real.md).
 - Autoscaling: medido em um spike (100 → 1.500 req/s pelo API Gateway): decisão de scale-out ~5 min depois do salto, task nova rodando ~44 s depois da decisão, 3 tasks em ~8,7 min e volta a 1 task ~22 min depois do fim do spike. Uma execução só; durante a saturação o p95 chegou a 290 ms e o erro a 0,17% num minuto ([`docs/autoscaling.md`](docs/autoscaling.md), [`docs/performance/benchmark-aws.md`](docs/performance/benchmark-aws.md)).
 - Soak de 2 h e 3 séries por perfil (cada série usou a mesma task); throttling de CPU do Fargate não medido. O spike foi feito com o throttling do estágio elevado temporariamente (restaurado em 50/100).
 - Rotação de 7 dias do segredo: a app invalida o cache em `28P01` (testado com cliente falso), mas uma rotação real não foi exercitada.
