@@ -22,7 +22,7 @@ Regras fixas: sem commit/push/PR sem pedido; nunca `terraform -chdir` (usar `Set
 | 2 | Completar o apply da stack via `infra.yml` (gate `infra`) | ~US$ 34/mês 24x7 | WP0, 5 itens de FinOps, OK no turno | **Concluído 13/10/2026**: run 38459253681, 17 added / 0 changed / 1 destroyed, sem AccessDenied (janela aberta ~20h UTC) |
 | 3 | Pós-apply: variable `API_URL`, smoke de `/`, `/health`, `/connect`, `deploy.yml` de ponta a ponta, evidências | baixo | WP2 | **Parcial**: `API_URL` criada; `/`, `/health`, `/connect` = 200; falta `deploy.yml` e evidências restantes |
 | 4 | Carga na AWS (dentro da VPC e pelo API Gateway); conferir cobrança do Cloud Map por `DiscoverInstances` | por requisição (calcular antes) | WP3 | **Concluído 13/10/2026**: parte A (API GW) e parte B (VPC) feitas; ver `docs/performance/benchmark-aws.md`; falta conferir Cloud Map no Cost Explorer (dia seguinte) |
-| 5 | Destroy + `residual-check.sh` (exit 0) ao fim de cada janela | zero | — | **Destroy feito em 13/10/2026** (run 38486943440, 50 destroyed); `residual-check.sh` com varreduras diretas limpas, exit 1 pelo índice de tags com atraso (ver README) |
+| 5 | Destroy + `residual-check.sh` (exit 0) ao fim de cada janela | zero | — | **Destroy feito em 13/10/2026** (run 38486943440, 50 destroyed); `residual-check.sh`: varreduras diretas limpas; exit 1 na noite do destroy (índice de tags com atraso e artefatos ECS), **exit 0 em 14/10** após classificar o ECS pelo status real (ver README) |
 | 6 | README "Pendências", `infrastructure/README.md` linha 43 (ADR 0012), higiene (CRLF, alarmes sem destino), repo privado no fim | zero | Resultados reais | Pendente |
 | Opc. | Benchmark local (branch só no PC original) e lab EKS | — | — | Se sobrar tempo |
 
