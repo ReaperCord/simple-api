@@ -289,7 +289,7 @@ jobs:
           "${RUNNER_TEMP}/actionlint-bin/actionlint" -color
 
   tools:
-    name: tools (teste do residual-check)
+    name: tools (testes dos scripts)
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -300,12 +300,15 @@ jobs:
 
       # Usa um "aws" falso (tools/test-residual-check.sh): sem credencial e sem tocar na AWS.
       # Cobre a classificacao de ECS marcado por tag pelo status real (cluster/service ativo e residuo).
-      - name: Sintaxe e teste do residual-check
+      - name: Sintaxe e testes (residual-check e run-db-init)
         run: |
           set -euo pipefail
           bash -n tools/residual-check.sh
           bash -n tools/test-residual-check.sh
           bash tools/test-residual-check.sh
+          bash -n tools/run-db-init.sh
+          bash -n tools/test-run-db-init.sh
+          bash tools/test-run-db-init.sh
 
   plan:
     name: plan (terraform plan com state em S3)

@@ -3,6 +3,7 @@
 const { createApp } = require('./app');
 const { loadConfig, ConfigError } = require('./config');
 const { createDb } = require('./db');
+const { createIamTokenProvider } = require('./iam-auth');
 const { createLogger } = require('./logger');
 const { createSecretProvider, createAwsSecretFetcher } = require('./secret');
 
@@ -41,8 +42,21 @@ function main() {
 
   const logger = createLogger({ level: config.logLevel });
 
+  // Provedor da "senha": token IAM do RDS (DB_AUTH_MODE=iam) ou segredo do Secrets Manager (DB_SECRET_ARN).
   let secretProvider = null;
-  if (config.db.secretArn) {
+  if (config.db.authMode === 'iam') {
+    try {
+      secretProvider = createIamTokenProvider({
+        hostname: config.db.host,
+        port: config.db.port,
+        username: config.db.user,
+        region: config.db.region,
+      });
+    } catch (err) {
+      logger.error('gerador de token IAM indisponivel', { reason: err.message });
+      process.exit(1);
+    }
+  } else if (config.db.secretArn) {
     try {
       secretProvider = createSecretProvider({
         fetchSecret: createAwsSecretFetcher(config.db.secretArn),

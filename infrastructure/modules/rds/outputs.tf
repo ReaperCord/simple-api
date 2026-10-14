@@ -22,3 +22,8 @@ output "master_user_secret_arn" {
   description = "ARN do segredo (Secrets Manager) com a senha master gerenciada pelo RDS; e um ARN, nao o segredo"
   value       = one(aws_db_instance.this.master_user_secret[*].secret_arn)
 }
+
+output "resource_id" {
+  description = "DbiResourceId da instancia (usado no ARN rds-db:connect da autenticacao IAM)"
+  value       = aws_db_instance.this.resource_id
+}

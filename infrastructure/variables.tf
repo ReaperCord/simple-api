@@ -270,3 +270,20 @@ variable "alarm_api_5xx_max" {
   description = "[PROPOSTA] a calibrar: alarma quando a soma de respostas 5xx da API em um periodo passa deste valor"
   type        = number
 }
+
+variable "db_iam_auth" {
+  description = "true: a app conecta ao RDS com autenticacao IAM como db_app_username (sem senha guardada e sem acesso da task ao segredo master); false: usuario master com a senha do segredo gerenciado. A escolha vale desde o primeiro apply (o service ignora mudancas de task definition)"
+  type        = bool
+  default     = false
+}
+
+variable "db_app_username" {
+  description = "Usuario do banco usado pela app no modo IAM (so com CONNECT; criado uma vez por src/db-init.js, ver docs/usuario-db-iam.md)"
+  type        = string
+  default     = "app_connect"
+
+  validation {
+    condition     = can(regex("^[a-z_][a-z0-9_]{0,62}$", var.db_app_username))
+    error_message = "db_app_username so aceita letras minusculas, digitos e underscore (ate 63 caracteres)."
+  }
+}
