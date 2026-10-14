@@ -890,17 +890,23 @@ data "aws_iam_policy_document" "eks_lab_iam" {
     condition {
       test     = "StringEquals"
       variable = "iam:PassedToService"
-      values   = ["eks.amazonaws.com", "ec2.amazonaws.com"]
+      values   = ["eks.amazonaws.com", "ec2.amazonaws.com", "pods.eks.amazonaws.com"] # pods.*: Pod Identity (3o erro da janela 3)
     }
   }
 
   # O EKS confere se a role de servico do node group existe antes de criar o node group
   # (erro real da janela 3: "missing permissions for 'iam:GetRole'" em AWSServiceRoleForAmazonEKSNodegroup).
   statement {
-    sid       = "IamReadServiceLinkedRolesEks"
-    effect    = "Allow"
-    actions   = ["iam:GetRole"] # so leitura, so roles de servico
-    resources = ["arn:${local.partition}:iam::${local.account_id}:role/aws-service-role/*"]
+    sid     = "IamReadServiceLinkedRolesEks"
+    effect  = "Allow"
+    actions = ["iam:GetRole"] # so leitura, so roles de servico
+    resources = [
+      "arn:${local.partition}:iam::${local.account_id}:role/aws-service-role/*",
+      # Role ainda inexistente: o IAM avalia o GetRole pelo ARN SEM o path (confirmado no simulador e no 2o erro da janela 3).
+      "arn:${local.partition}:iam::${local.account_id}:role/AWSServiceRoleForAmazonEKS",
+      "arn:${local.partition}:iam::${local.account_id}:role/AWSServiceRoleForAmazonEKSNodegroup",
+      "arn:${local.partition}:iam::${local.account_id}:role/AWSServiceRoleForElasticLoadBalancing",
+    ]
   }
 
   # Primeiro uso de EKS, node group e Elastic Load Balancing na conta.
