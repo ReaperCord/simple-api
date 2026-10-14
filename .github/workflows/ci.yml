@@ -288,6 +288,25 @@ jobs:
           cd "${GITHUB_WORKSPACE}"
           "${RUNNER_TEMP}/actionlint-bin/actionlint" -color
 
+  tools:
+    name: tools (teste do residual-check)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Usa um "aws" falso (tools/test-residual-check.sh): sem credencial e sem tocar na AWS.
+      # Cobre a classificacao de ECS marcado por tag pelo status real (cluster/service ativo e residuo).
+      - name: Sintaxe e teste do residual-check
+        run: |
+          set -euo pipefail
+          bash -n tools/residual-check.sh
+          bash -n tools/test-residual-check.sh
+          bash tools/test-residual-check.sh
+
   plan:
     name: plan (terraform plan com state em S3)
     # Sem fork (nunca recebe id-token) e so quando a variavel da role existir.
