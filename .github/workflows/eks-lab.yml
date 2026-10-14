@@ -153,12 +153,14 @@ jobs:
           vpc_id="$(aws eks describe-cluster --name "${CLUSTER_NAME}" --query 'cluster.resourcesVpcConfig.vpcId' --output text)"
           helm repo add eks https://aws.github.io/eks-charts
           helm repo update eks
+          # createIngressClassResource=false: o IngressClassParams (CRD ainda inexistente) quebra a validacao do helm
+          # ("server is currently unable to handle the request"); o lab usa so Service/NLB, sem Ingress. Visto na janela 3.
           for attempt in 1 2 3; do
             if helm upgrade --install aws-load-balancer-controller eks/aws-load-balancer-controller \
               --namespace kube-system --version "${LBC_CHART_VERSION}" \
               --set clusterName="${CLUSTER_NAME}" --set region="${AWS_REGION}" --set vpcId="${vpc_id}" \
               --set serviceAccount.create=true --set serviceAccount.name=aws-load-balancer-controller \
-              --set replicaCount=1 --wait --timeout 10m; then
+              --set replicaCount=1 --set createIngressClassResource=false --wait --timeout 10m; then
               break
             fi
             [ "${attempt}" -lt 3 ] || exit 1
