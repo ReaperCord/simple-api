@@ -34,7 +34,7 @@ db-init (task efêmera, role própria com GetSecretValue no segredo master)
 
 ## Comportamentos medidos na validação
 
-- A **primeira** conexão fria depois de criar o usuário pode dar um 503 pontual (2,0 s = `connectionTimeoutMillis`); a seguinte funciona.
+- A **primeira** conexão fria depois de criar o usuário pode dar um 503 pontual (2,0 s = `connectionTimeoutMillis`); a seguinte funciona. A app agora **pré-aquece** o token e a primeira conexão na partida (`src/prewarm.js`); o efeito ainda não foi medido na AWS. Se o `db-init` ainda não rodou, o pré-aquecimento falha com um aviso e a app segue de pé.
 - Depois de **ligar** a autenticação IAM numa instância já no ar, o `/connect` fica indisponível por ~1 min.
 - O `tools/run-db-init.sh` já roda sem erro no Git Bash (corrigido o `MSYS_NO_PATHCONV`).
 
