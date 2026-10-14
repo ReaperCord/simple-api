@@ -1,0 +1,40 @@
+Validacao na AWS do usuario da app so com CONNECT via autenticacao IAM do RDS (ADR 0013), janela 2, 14/10/2026.
+Evidencias transcritas da saida dos comandos (a stack e destruida ao fim da janela).
+
+1) Apply (infra.yml run 38573942311): Apply complete! Resources: 54 added, 0 changed, 0 destroyed.
+   RDS db.t4g.micro available, IAMDatabaseAuthenticationEnabled = True.
+
+2) Antes do db-init: GET /=200, /health=200, /connect=503 (usuario ainda nao existia).
+
+3) tools/run-db-init.sh dev (task efemera simple-api-dev-dbinit, exit code 0):
+   DBINIT {"user":"app_connect","database":"simple_api","created":true,"privileges":{"login":true,"superuser":false,
+   "createdb":false,"createrole":false,"replication":false,"bypassrls":false,"rds_iam":true,"db_connect":true,
+   "db_create":false,"schema_create":false},"ok":true}
+   Segunda execucao (idempotencia): "created":false, mesmos privilegios, "ok":true.
+
+4) GET /connect pelo API Gateway com token IAM: 1a chamada 503 (duration_ms 2003 = connectionTimeoutMillis de 2 s,
+   geracao fria do token), depois 200 (859 ms e 51 ms) com "PostgreSQL 16.13 on aarch64-unknown-linux-gnu".
+
+5) IAM (aws iam simulate-principal-policy) para a task role da API (simple-api-dev-ecs-task):
+   secretsmanager:GetSecretValue no segredo master ........ implicitDeny
+   rds-db:connect como app_connect (esta instancia) ......... allowed
+   rds-db:connect como simple_api (master) .................. implicitDeny
+   rds-db:connect como app_connect em OUTRA instancia ....... implicitDeny
+   Role do db-init (simple-api-dev-dbinit): GetSecretValue no segredo master = allowed; rds-db:connect = implicitDeny.
+   Task definition da API: variaveis API_PORT AWS_REGION DB_AUTH_MODE DB_DATABASE DB_HOST DB_POOL_MAX DB_PORT DB_SSLMODE
+   DB_USER LOG_LEVEL; sem DB_SECRET_ARN, sem senha, sem secrets[].
+
+6) Sonda no banco como app_connect (task efemera com o codigo da app, exit code 0):
+   current_user = app_connect ................ PERMITIDO
+   SELECT version() .......................... PERMITIDO
+   CREATE TABLE public.zz_probe .............. NEGADO 42501 permission denied for schema public
+   CREATE SCHEMA zz_probe .................... NEGADO 42501 permission denied for database simple_api
+   CREATE ROLE zz_probe_role ................. NEGADO 42501 permission denied to create role
+   SELECT FROM pg_authid ..................... NEGADO 42501 permission denied for table pg_authid
+   SET ROLE simple_api (master) .............. NEGADO 42501 permission denied to set role "simple_api"
+   SELECT FROM pg_shadow ..................... NEGADO 42501 permission denied for view pg_shadow
+
+7) deploy.yml (run 38576385517, fluxo normal): sucesso, smoke GET / e /connect = 200, rollback pulado; service na task def :4.
+
+8) FreeableMemory do RDS (CloudWatch, media por minuto) antes e depois do uso de IAM: ~64 a 95 MiB, estavel
+   (sem queda visivel apos o primeiro /connect com token IAM). O comportamento sob carga e no soak e registrado a parte.
