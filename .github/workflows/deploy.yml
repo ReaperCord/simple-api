@@ -46,6 +46,8 @@ jobs:
         with:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
+          # A action NAO mascara o account id por padrao; os logs deste repo sao publicos.
+          mask-aws-account-id: true
 
       - name: Login no ECR
         id: ecr
