@@ -188,6 +188,25 @@ jobs:
             --from-literal=DB_DATABASE="$(terraform output -raw db_name)" \
             --from-literal=DB_USER="$(terraform output -raw db_app_username)" \
             --dry-run=client -o yaml | kubectl apply -f -
+          # Projeto proprio: no modo core nao ha argocd-server, que e quem cria o AppProject `default`
+          # (erro real da janela 3: "Application referencing project default which does not exist").
+          # Minimo necessario: so este repo, so o namespace da app e, de cluster, so o Namespace.
+          cat <<EOF | kubectl apply -f -
+          apiVersion: argoproj.io/v1alpha1
+          kind: AppProject
+          metadata:
+            name: simple-api
+            namespace: argocd
+          spec:
+            sourceRepos:
+              - https://github.com/${GITHUB_REPOSITORY}.git
+            destinations:
+              - server: https://kubernetes.default.svc
+                namespace: simple-api
+            clusterResourceWhitelist:
+              - group: ""
+                kind: Namespace
+          EOF
           cat <<EOF | kubectl apply -f -
           apiVersion: argoproj.io/v1alpha1
           kind: Application
@@ -197,7 +216,7 @@ jobs:
             finalizers:
               - resources-finalizer.argocd.argoproj.io
           spec:
-            project: default
+            project: simple-api
             source:
               repoURL: https://github.com/${GITHUB_REPOSITORY}.git
               targetRevision: main
