@@ -11,6 +11,8 @@ REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}"
 PROJECT="simple-api"
 NAME="${PROJECT}-${ENVIRONMENT}"
 export AWS_REGION="$REGION" AWS_PAGER=""
+# Git Bash (Windows) converte argumentos que comecam com "/" (ex.: /ecs/nome) em caminhos do Windows.
+export MSYS_NO_PATHCONV=1
 
 fail() { echo "ERRO: $*" >&2; exit 2; }
 command -v aws >/dev/null 2>&1 || fail "AWS CLI nao encontrada."

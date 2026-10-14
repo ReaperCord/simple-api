@@ -1,0 +1,11 @@
+14:59:09 BRT  inicio. origem simple-api-dev-db (IAM=True); /connect=200
+14:59:09 BRT  [P1] restore-db-instance-to-point-in-time (pedido)
+15:15:05 BRT  [P1] restaurada: available apos 953 s (15.9 min); IAM=True; DbiResourceId novo difere do antigo: True
+15:15:10 BRT  [P2] policy rds-db:connect atualizada para o DbiResourceId novo em 4 s
+15:15:14 BRT  [P3a] nova revisao registrada e update-service chamado em 5 s
+15:17:36 BRT  [P3b] service estavel com a task nova apos 146 s
+15:17:45 BRT  [P4] /connect=200 apos 156 s da troca (token IAM assinado para o host novo prova que conectou na restaurada)
+15:17:45 BRT  [RTO] pedido do restore -> /connect=200: 1113 s (18.5 min)  [restore 953 s + policy 4 s + troca 156 s]
+15:20:11 BRT  [limpeza] service e policy revertidos; /connect=200
+15:21:45 BRT  [limpeza] restaurada apagada em 92 s
+15:21:45 BRT  DONE
