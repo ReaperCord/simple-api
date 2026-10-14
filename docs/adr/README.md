@@ -17,12 +17,13 @@ Convenções usadas nos ADRs:
 | [0004](0004-rds-postgresql-db-t4g-micro-single-az-privado.md) | RDS PostgreSQL db.t4g.micro, single-AZ e privado | Aceito, implementado, não aplicado |
 | [0005](0005-sem-nat-tasks-em-subnet-publica.md) | Sem NAT Gateway, tasks em subnet pública com SG restrito | Aceito, implementado, não aplicado |
 | [0006](0006-tls-verify-full-e-segredo-gerenciado-pelo-rds.md) | TLS verify-full e segredo gerenciado pelo RDS com rotação de 7 dias | Aceito, implementado, não validado contra a AWS |
-| [0007](0007-eks-somente-como-laboratorio-efemero.md) | EKS somente como laboratório efêmero | Aceito como desenho, não implementado |
+| [0007](0007-eks-somente-como-laboratorio-efemero.md) | EKS somente como laboratório efêmero | Aceito; implementado no ADR 0014, validado localmente, não aplicado na AWS |
 | [0008](0008-terraform-com-roots-separados.md) | Terraform com roots separados (bootstrap, principal e eks-lab) | Aceito, `eks-lab` não implementado |
 | [0009](0009-pipeline-com-oidc-e-um-environment-por-workflow.md) | Pipeline com OIDC e um environment por workflow | Aceito, implementado, não executado |
 | [0010](0010-regras-de-sg-por-chaves-simbolicas.md) | Regras de SG por chaves simbólicas em vez de `templatefile()` | Aceito, implementado e coberto por `terraform test` |
 | [0011](0011-dr-via-pitr.md) | Recuperação de desastre por backups automáticos e PITR | Aceito como plano, não implementado e não testado |
 | [0012](0012-divergencia-da-arquitetura-alvo.md) | Divergência consciente da arquitetura alvo (ALB e NAT) | Aceito, implementado, não aplicado |
+| [0014](0014-lab-eks-com-argo-cd-core-e-nlb-interno.md) | Laboratório EKS efêmero: Argo CD core, NLB interno pelo mesmo API Gateway e os desvios da steering | Aceito, implementado e validado localmente (kind), não aplicado na AWS |
 | [0013](0013-usuario-da-app-so-connect-via-iam.md) | Usuário da app só com CONNECT, via autenticação IAM do RDS | Aceito, implementado e validado na AWS (14/10/2026); decidido manter IAM no `db.t4g.micro` |
 
 ## Outros documentos de arquitetura

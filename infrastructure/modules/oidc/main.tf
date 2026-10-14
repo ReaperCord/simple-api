@@ -8,7 +8,8 @@ locals {
 
   # Claim sub de cada role (03-devsecops.md). Sem curingas no contexto: cada workflow roda num
   # environment proprio do GitHub, entao um nao consegue assumir a role do outro.
-  # NAO existe gha-eks-lab aqui: o root eks-lab esta fora do escopo desta fase.
+  # gha-eks-lab: roda so o root infrastructure/eks-lab no environment eks-lab (sem aprovacao; o destroy agendado por TTL
+  # precisa rodar sozinho). Ver o fim deste arquivo.
   #
   # Dois formatos de sub por role (lista fechada, sem curinga):
   #  - por NOME: repo:OWNER/REPO:<contexto>            (repos criados ate 15/07/2026)
@@ -18,9 +19,10 @@ locals {
   github_sub_prefix_name      = "repo:${var.github_owner}/${var.github_repo}"
   github_sub_prefix_immutable = "repo:${var.github_owner}@${var.github_owner_id}/${var.github_repo}@${var.github_repo_id}"
   role_contexts = {
-    "gha-plan"   = "pull_request"
-    "gha-deploy" = "environment:deploy"
-    "gha-infra"  = "environment:infra"
+    "gha-plan"    = "pull_request"
+    "gha-deploy"  = "environment:deploy"
+    "gha-infra"   = "environment:infra"
+    "gha-eks-lab" = "environment:eks-lab"
   }
   role_subjects = {
     for role, ctx in local.role_contexts : role => [
@@ -52,9 +54,10 @@ locals {
   }
 
   role_policies = {
-    "gha-plan"   = data.aws_iam_policy_document.plan.json
-    "gha-deploy" = data.aws_iam_policy_document.deploy.json
-    "gha-infra"  = data.aws_iam_policy_document.infra.json
+    "gha-plan"    = data.aws_iam_policy_document.plan.json
+    "gha-deploy"  = data.aws_iam_policy_document.deploy.json
+    "gha-infra"   = data.aws_iam_policy_document.infra.json
+    "gha-eks-lab" = data.aws_iam_policy_document.eks_lab.json
   }
 
   # ARNs construidos (sem account ID ou regiao literal).
@@ -663,4 +666,261 @@ data "aws_iam_policy_document" "infra_iam_state" {
     ]
     resources = [local.state_lock_arn]
   }
+}
+
+# ---------------------------------------------------------------------------------------------
+# gha-eks-lab: aplica e destroi SO o root eks-lab (EKS, node group, add-ons, Pod Identity, regras proprias do lab).
+# Roda no environment "eks-lab" (sem aprovacao: o destroy agendado por TTL precisa rodar sozinho). Nao opera a stack
+# principal. Policy dividida em duas (limite de 6.144 caracteres por policy gerenciada): esta e a de IAM.
+# ---------------------------------------------------------------------------------------------
+locals {
+  eks_lab_state_key = replace(var.state_key, "terraform.tfstate", "eks-lab/terraform.tfstate")
+  eks_lab_cluster   = "${var.project_name}-*-eks"
+  eks_prefix        = "arn:${local.partition}:eks:${var.region}:${local.account_id}"
+  eks_lab_role_arn  = "arn:${local.partition}:iam::${local.account_id}:role/${var.project_name}-*-eks-*"
+  eks_lab_policy    = "arn:${local.partition}:iam::${local.account_id}:policy/${var.project_name}-*-eks-*"
+}
+
+data "aws_iam_policy_document" "eks_lab" {
+  # Resource "*": Describe* e List* nao aceitam ARN.
+  statement {
+    sid       = "DescribeRegional"
+    effect    = "Allow"
+    resources = ["*"]
+    actions = [
+      "eks:Describe*",                              # refresh do cluster, node group, add-ons e Pod Identity
+      "eks:List*",                                  # listagens (o destroy agendado procura clusters vencidos por tag)
+      "ec2:Describe*",                              # refresh de VPC, subnets, SGs, ENIs e instancias dos nos
+      "elasticloadbalancing:DescribeLoadBalancers", # data.aws_lb e a espera do NLB criado pelo controller
+      "elasticloadbalancing:DescribeListeners",     # data.aws_lb_listener (ARN do listener do NLB)
+      "elasticloadbalancing:DescribeTags",          # data.aws_lb por tag service.k8s.aws/stack
+      "iam:ListRolePolicies",                       # refresh das roles do lab
+      "iam:ListAttachedRolePolicies",               # refresh dos anexos das roles do lab
+    ]
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestedRegion"
+      values   = [var.region]
+    }
+  }
+
+  statement {
+    sid    = "EksLabCluster"
+    effect = "Allow"
+    resources = [
+      "${local.eks_prefix}:cluster/${local.eks_lab_cluster}",
+      "${local.eks_prefix}:nodegroup/${local.eks_lab_cluster}/*",
+      "${local.eks_prefix}:addon/${local.eks_lab_cluster}/*",
+      "${local.eks_prefix}:access-entry/${local.eks_lab_cluster}/*",
+      "${local.eks_prefix}:podidentityassociation/${local.eks_lab_cluster}/*",
+    ]
+    actions = [
+      "eks:CreateCluster",                # cluster do lab
+      "eks:DeleteCluster",                # destroy do lab
+      "eks:UpdateClusterConfig",          # ajustes do cluster
+      "eks:UpdateClusterVersion",         # upgrade_policy e versao
+      "eks:TagResource",                  # tags (Project, TTL...)
+      "eks:UntagResource",                # remocao de tags
+      "eks:CreateNodegroup",              # managed node group
+      "eks:DeleteNodegroup",              # destroy do node group
+      "eks:UpdateNodegroupConfig",        # escala dos nos
+      "eks:UpdateNodegroupVersion",       # versao dos nos
+      "eks:CreateAddon",                  # vpc-cni, kube-proxy, coredns, pod identity agent, metrics-server
+      "eks:UpdateAddon",                  # versao dos add-ons
+      "eks:DeleteAddon",                  # destroy dos add-ons
+      "eks:CreateAccessEntry",            # acesso de administrador por IAM (authentication_mode = API)
+      "eks:UpdateAccessEntry",            # ajuste do access entry
+      "eks:DeleteAccessEntry",            # destroy do access entry
+      "eks:AssociateAccessPolicy",        # politica de acesso do administrador
+      "eks:DisassociateAccessPolicy",     # destroy da associacao
+      "eks:CreatePodIdentityAssociation", # Pod Identity do controller e da app
+      "eks:UpdatePodIdentityAssociation", # ajuste da associacao
+      "eks:DeletePodIdentityAssociation", # destroy da associacao
+    ]
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestedRegion"
+      values   = [var.region]
+    }
+  }
+
+  # Regras e tags PROPRIAS do lab (resource "*" nas SGs porque a SG do cluster nasce com o cluster): so reescrevem
+  # regras e tags, nao criam nem apagam SG.
+  statement {
+    sid       = "Ec2LabRulesAndTags"
+    effect    = "Allow"
+    resources = ["*"]
+    actions = [
+      "ec2:AuthorizeSecurityGroupIngress",              # regra do RDS e dos pods (aws_vpc_security_group_ingress_rule)
+      "ec2:AuthorizeSecurityGroupEgress",               # saida do VPC Link ate o NLB
+      "ec2:RevokeSecurityGroupIngress",                 # destroy das regras
+      "ec2:RevokeSecurityGroupEgress",                  # destroy das regras
+      "ec2:ModifySecurityGroupRules",                   # update in-place de regras
+      "ec2:UpdateSecurityGroupRuleDescriptionsIngress", # descricao das regras de entrada
+      "ec2:UpdateSecurityGroupRuleDescriptionsEgress",  # descricao das regras de saida
+      "ec2:CreateTags",                                 # aws_ec2_tag (kubernetes.io/role/internal-elb) e tags do cluster
+      "ec2:DeleteTags",                                 # remove a tag no destroy
+    ]
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestedRegion"
+      values   = [var.region]
+    }
+  }
+
+  # Rotas do lab na HTTP API da stack principal: integracao e rota ANY /eks. O ID da API muda a cada apply da stack.
+  statement {
+    sid    = "ApiGatewayEksRoutes"
+    effect = "Allow"
+    actions = [
+      "apigateway:GET",    # leitura no refresh
+      "apigateway:POST",   # cria integracao e rota
+      "apigateway:PATCH",  # update da integracao e da rota
+      "apigateway:DELETE", # destroy da integracao e da rota
+    ]
+    resources = [
+      "${local.apigateway_arn}/apis",
+      "${local.apigateway_arn}/apis/*",
+    ]
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestedRegion"
+      values   = [var.region]
+    }
+  }
+
+  statement {
+    sid       = "ListStateBucket"
+    effect    = "Allow"
+    actions   = ["s3:ListBucket"] # backend S3 lista o bucket
+    resources = [local.state_bucket_arn]
+  }
+
+  statement {
+    sid       = "EksLabState"
+    effect    = "Allow"
+    actions   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"] # le e grava o state PROPRIO do lab
+    resources = ["${local.state_bucket_arn}/${local.eks_lab_state_key}"]
+  }
+
+  statement {
+    sid       = "EksLabStateLock"
+    effect    = "Allow"
+    actions   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"] # trava nativa (use_lockfile): <key>.tflock
+    resources = ["${local.state_bucket_arn}/${local.eks_lab_state_key}.tflock"]
+  }
+
+  statement {
+    sid       = "ReadMainState"
+    effect    = "Allow"
+    actions   = ["s3:GetObject"] # terraform_remote_state da stack principal: SOMENTE leitura
+    resources = [local.state_object_arn]
+  }
+}
+
+data "aws_iam_policy_document" "eks_lab_iam" {
+  # So roles e policies do lab (prefixo <projeto>-<env>-eks-). Nao alcanca as roles gha-*, nem as da stack principal.
+  statement {
+    sid       = "IamEksLabRoles"
+    effect    = "Allow"
+    resources = [local.eks_lab_role_arn]
+    actions = [
+      "iam:CreateRole",                  # roles do cluster, dos nos e do Pod Identity
+      "iam:DeleteRole",                  # destroy
+      "iam:GetRole",                     # refresh
+      "iam:UpdateAssumeRolePolicy",      # trust policy
+      "iam:TagRole",                     # tags
+      "iam:UntagRole",                   # tags
+      "iam:ListRoleTags",                # tags no refresh
+      "iam:ListInstanceProfilesForRole", # refresh de aws_iam_role
+    ]
+  }
+
+  # Anexa so as politicas gerenciadas da AWS necessarias ao EKS e as politicas do proprio lab (evita AdministratorAccess).
+  statement {
+    sid       = "IamAttachEksLabPolicies"
+    effect    = "Allow"
+    resources = [local.eks_lab_role_arn]
+    actions = [
+      "iam:AttachRolePolicy", # anexa a politica
+      "iam:DetachRolePolicy", # destroy do anexo
+    ]
+
+    condition {
+      test     = "ArnLike"
+      variable = "iam:PolicyARN"
+      values = [
+        local.eks_lab_policy,
+        "arn:${local.partition}:iam::aws:policy/AmazonEKSClusterPolicy",
+        "arn:${local.partition}:iam::aws:policy/AmazonEKSWorkerNodePolicy",
+        "arn:${local.partition}:iam::aws:policy/AmazonEKS_CNI_Policy",
+        "arn:${local.partition}:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly",
+      ]
+    }
+  }
+
+  statement {
+    sid       = "IamEksLabPolicies"
+    effect    = "Allow"
+    resources = [local.eks_lab_policy]
+    actions = [
+      "iam:CreatePolicy",        # policies do controller e da app
+      "iam:DeletePolicy",        # destroy
+      "iam:GetPolicy",           # refresh
+      "iam:GetPolicyVersion",    # refresh
+      "iam:ListPolicyVersions",  # refresh
+      "iam:CreatePolicyVersion", # update da policy
+      "iam:DeletePolicyVersion", # limpeza de versoes
+      "iam:TagPolicy",           # tags
+      "iam:UntagPolicy",         # tags
+      "iam:ListPolicyTags",      # tags no refresh
+    ]
+  }
+
+  statement {
+    sid       = "IamPassEksLabRoles"
+    effect    = "Allow"
+    actions   = ["iam:PassRole"] # o EKS e o node group usam as roles do lab
+    resources = [local.eks_lab_role_arn]
+
+    condition {
+      test     = "StringEquals"
+      variable = "iam:PassedToService"
+      values   = ["eks.amazonaws.com", "ec2.amazonaws.com"]
+    }
+  }
+
+  # Primeiro uso de EKS, node group e Elastic Load Balancing na conta.
+  statement {
+    sid       = "IamServiceLinkedRolesEks"
+    effect    = "Allow"
+    actions   = ["iam:CreateServiceLinkedRole"] # cria as roles de servico se ainda nao existirem
+    resources = ["arn:${local.partition}:iam::${local.account_id}:role/aws-service-role/*"]
+
+    condition {
+      test     = "StringEquals"
+      variable = "iam:AWSServiceName"
+      values = [
+        "eks.amazonaws.com",
+        "eks-nodegroup.amazonaws.com",
+        "elasticloadbalancing.amazonaws.com",
+      ]
+    }
+  }
+}
+
+resource "aws_iam_policy" "eks_lab_iam" {
+  name        = "gha-eks-lab-iam-policy"
+  description = "gha-eks-lab: IAM do lab EKS (roles e policies <projeto>-*-eks-*)"
+  policy      = data.aws_iam_policy_document.eks_lab_iam.json
+  tags        = var.tags
+}
+
+resource "aws_iam_role_policy_attachment" "eks_lab_iam" {
+  role       = module.role["gha-eks-lab"].role_name
+  policy_arn = aws_iam_policy.eks_lab_iam.arn
 }

@@ -72,3 +72,40 @@ output "db_app_username" {
   description = "Usuario do banco usado pela app (modo IAM) ou null no modo senha"
   value       = var.db_iam_auth ? var.db_app_username : null
 }
+
+# Outputs lidos pelo root infrastructure/eks-lab via terraform_remote_state (nunca o contrario).
+output "api_id" {
+  description = "ID da HTTP API (a rota /eks do lab EKS entra nesta mesma API)"
+  value       = module.apigw.api_id
+}
+
+output "vpc_link_id" {
+  description = "ID do VPC Link V2 (compartilhado com o lab EKS)"
+  value       = module.apigw.vpc_link_id
+}
+
+output "vpclink_security_group_id" {
+  description = "SG do VPC Link V2 (o lab EKS acrescenta a regra de saida para o NLB)"
+  value       = module.sg_vpclink.security_group_id
+}
+
+output "rds_security_group_id" {
+  description = "SG do RDS (o lab EKS acrescenta uma regra de entrada 5432 a partir do SG do cluster, so enquanto o lab existir)"
+  value       = module.sg_rds.security_group_id
+}
+
+output "rds_resource_id" {
+  description = "DbiResourceId do RDS (ARN rds-db:connect do Pod Identity do lab EKS)"
+  value       = module.rds.resource_id
+}
+
+output "rds_port" {
+  description = "Porta do banco"
+  value       = module.rds.port
+}
+
+output "rds_db_name" {
+  description = "Nome do banco"
+  value       = module.rds.db_name
+}
+

@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: simple-api
+  labels:
+    # Pod Security Admission no perfil mais restrito: a Deployment ja cumpre (non-root, seccomp, sem capabilities).
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest

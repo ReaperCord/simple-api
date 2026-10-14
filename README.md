@@ -273,6 +273,7 @@ Só entram números da tabela de preços de [`02-finops-guardrails.md`](.kiro/st
 | [`docs/performance/benchmark-aws.md`](docs/performance/benchmark-aws.md) | Carga na AWS (API Gateway e dentro da VPC), rotulada AWS, com ressalvas |
 | [`docs/plano/`](docs/plano/00-plano-execucao.md) | Plano de execução, auditoria de IAM da `gha-infra`, FinOps do apply e desenho da carga na VPC |
 | [`docs/verificacoes/`](docs/verificacoes/2026-10-13-estado-final.md) | Verificação das afirmações dos docs contra dados e estado real: [13/10](docs/verificacoes/2026-10-13-estado-final.md) e [janela 2 (14/10)](docs/verificacoes/2026-10-14-janela-2.md) |
+| [`docs/eks-lab.md`](docs/eks-lab.md) | Runbook do laboratório EKS: teste local no kind, como subir e descer, e o que costuma precisar de ajuste |
 | [`docs/adr/`](docs/adr/README.md) | Decisões de arquitetura |
 | [`docs/KIRO-SETUP.md`](docs/KIRO-SETUP.md) | Pacote de guardrails de agentes de IA |
 | [`AGENTS.md`](AGENTS.md) | Contrato de trabalho e regras anti-alucinação |
@@ -322,7 +323,7 @@ Estado em 14/10/2026 (fim da janela 2): a stack foi criada na AWS duas vezes (13
 - Replicação entre regiões e snapshot entre contas: só documentados, por escopo e por custo.
 
 **Não implementado**
-- Laboratório EKS: `infrastructure/eks-lab/`, `k8s/`, `eks-lab.yml`, a branch `gitops` e a role `gha-eks-lab` não existem ([ADR 0007](docs/adr/0007-eks-somente-como-laboratorio-efemero.md)).
+- Laboratório EKS: **implementado e validado só localmente e em CI, nunca aplicado na AWS** ([ADR 0007](docs/adr/0007-eks-somente-como-laboratorio-efemero.md), [ADR 0014](docs/adr/0014-lab-eks-com-argo-cd-core-e-nlb-interno.md), runbook em [`docs/eks-lab.md`](docs/eks-lab.md)): manifests Kustomize em `k8s/` testados no kind (15 de 15, incluindo 3 rolling restarts sem requisição falhada; o teste achou a falta de um `preStop`), root `infrastructure/eks-lab` com `terraform validate` e 9 testes, role `gha-eks-lab` e o workflow `eks-lab.yml`. O Argo CD observa a `main` (não a branch `gitops` da steering, por causa do account id; desvio registrado no ADR). Falta a janela de AWS: o formato do `overwrite:path`, a regra do VPC Link até o NLB e as permissões da `gha-eks-lab` só se validam lá.
 - Notificação dos alarmes: o código cria três alarmes (crédito de CPU do RDS, espaço livre e respostas 5xx da API), mas `alarm_action_arns` é vazio por padrão, então nenhum alarme avisa ninguém.
 - Rotina de atualização do digest da imagem e das dependências (Dependabot ou Renovate): não decidida.
 

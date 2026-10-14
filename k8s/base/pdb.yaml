@@ -1,0 +1,10 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: simple-api
+spec:
+  # Com 1 replica (minimo do HPA) isto bloqueia o drain voluntario do no ate haver 2; e o que a steering pede.
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: simple-api
