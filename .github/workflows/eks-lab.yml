@@ -142,6 +142,9 @@ jobs:
           aws eks update-kubeconfig --name "${CLUSTER_NAME}"
           kubectl wait --for=condition=Ready node --all --timeout=600s
           kubectl get nodes
+          # APIServices agregadas (metrics-server) indisponiveis fazem o helm falhar na validacao
+          # ("the server is currently unable to handle the request", visto na janela 3).
+          kubectl wait --for=condition=Available apiservice --all --timeout=300s
 
       - name: AWS Load Balancer Controller (helm, Pod Identity)
         if: ${{ env.ACTION == 'up' }}
@@ -150,11 +153,18 @@ jobs:
           vpc_id="$(aws eks describe-cluster --name "${CLUSTER_NAME}" --query 'cluster.resourcesVpcConfig.vpcId' --output text)"
           helm repo add eks https://aws.github.io/eks-charts
           helm repo update eks
-          helm upgrade --install aws-load-balancer-controller eks/aws-load-balancer-controller \
-            --namespace kube-system --version "${LBC_CHART_VERSION}" \
-            --set clusterName="${CLUSTER_NAME}" --set region="${AWS_REGION}" --set vpcId="${vpc_id}" \
-            --set serviceAccount.create=true --set serviceAccount.name=aws-load-balancer-controller \
-            --set replicaCount=1 --wait --timeout 10m
+          for attempt in 1 2 3; do
+            if helm upgrade --install aws-load-balancer-controller eks/aws-load-balancer-controller \
+              --namespace kube-system --version "${LBC_CHART_VERSION}" \
+              --set clusterName="${CLUSTER_NAME}" --set region="${AWS_REGION}" --set vpcId="${vpc_id}" \
+              --set serviceAccount.create=true --set serviceAccount.name=aws-load-balancer-controller \
+              --set replicaCount=1 --wait --timeout 10m; then
+              break
+            fi
+            [ "${attempt}" -lt 3 ] || exit 1
+            echo "helm falhou (tentativa ${attempt}); aguardando a API do cluster"
+            sleep 30
+          done
 
       - name: Argo CD (componentes core)
         if: ${{ env.ACTION == 'up' }}
