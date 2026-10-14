@@ -1,0 +1,12 @@
+# Hook local do gitleaks (03-devsecops.md): barra o commit se houver segredo no que esta staged.
+# Mesma versao do gitleaks usada no CI (GITLEAKS_VERSION em .github/workflows/ci.yml); atualize os dois juntos.
+# O gitleaks le a configuracao de .gitleaks.toml na raiz do repo.
+# Instalar uma vez:  pip install pre-commit  &&  pre-commit install
+# Rodar em tudo:     pre-commit run gitleaks --all-files
+# O hook "gitleaks" compila o binario com Go (o pre-commit baixa o toolchain). Se o gitleaks ja estiver instalado
+# na maquina, troque o id por "gitleaks-system".
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
