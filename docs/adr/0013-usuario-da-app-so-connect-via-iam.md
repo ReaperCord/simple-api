@@ -29,9 +29,30 @@
 - **Dependência nova:** `@aws-sdk/rds-signer` fixada em `3.1150.0` (mesma versão do `@aws-sdk/client-secrets-manager` que a app já usa; Apache-2.0; `npm audit --omit=dev` com 0 vulnerabilidades). A steering pede OK do Leandro antes de adicionar pacote; o pedido foi descrito na conversa de 14/10/2026 e confirmado com "pode seguir" (interpretação registrada aqui para ser revista).
 - **Passo manual novo no runbook:** depois do `infra.yml apply`, rodar `tools/run-db-init.sh` uma vez. Até lá a rota `/connect` responde 503 e o smoke do `deploy.yml` falha ([`docs/usuario-db-iam.md`](../usuario-db-iam.md)).
 - O token não é registrado em CloudWatch/CloudTrail (limitação da AWS), então o diagnóstico de falha de autenticação depende do log da app (que só registra `name` e `code`).
-- **Risco de memória no `db.t4g.micro`:** a doc da AWS indica 300 a 1000 MiB extras. **Não validado na AWS**; a primeira janela com `db_iam_auth = true` deve acompanhar `FreeableMemory` do RDS e o `/connect` sob carga. Se não couber, o plano é voltar a `db_iam_auth = false` (modo senha, comportamento anterior).
+- **Risco de memória no `db.t4g.micro`:** a doc da AWS indicava 300 a 1000 MiB extras; medido na AWS: ~117 MiB de RAM e ~150 MiB de swap (ver "Validação na AWS"). Se a margem não bastar, voltar a `db_iam_auth = false` (modo senha) ou subir a classe.
 - Limite de conexões novas por segundo com IAM: não consultei o número (**a verificar** na doc do RDS); o pool de 3 conexões por task reaproveita conexões, então o impacto esperado é baixo.
+
+## Validação na AWS (14/10/2026)
+
+Evidências em `tests/load/results/2026-10-14-aws-iam-auth-validacao.txt` e `…-rds-metricas-iam-vs-senha.csv`; análise em [`docs/performance/benchmark-aws.md`](../performance/benchmark-aws.md).
+
+- **Funciona:** apply de 54 recursos, `db-init` (idempotente; `app_connect` com só `rds_iam` e `CONNECT`), `/connect` = 200 com token IAM, `deploy.yml` verde com smoke.
+- **Menor privilégio comprovado:** a role da API não lê o segredo master (`implicitDeny`) e conecta só como `app_connect` nesta instância; como `app_connect`, criar tabela, schema ou role, ler `pg_authid`/`pg_shadow` e `SET ROLE` do master foram negados (`42501`).
+- **Estável:** 2 h de soak a 600 req/s com 0% de erro e sem deriva de latência.
+- **O risco de memória se confirmou, e a causa foi provada por A/B na mesma instância:** a autenticação IAM custa ~117 MiB de RAM e ~150 MiB de swap no `db.t4g.micro` (memória livre 152 a 184 MiB → 52 a 68 MiB; swap 0,5 → 134 a 201 MiB (médias de 5 min); créditos de CPU em ~0). Sem cobrança extra de créditos excedentes na janela, sem erro, mas **com a margem fina**.
+- **Dois comportamentos para saber:** (1) a primeira conexão fria pode estourar o `connectionTimeoutMillis` de 2 s (geração do token e TLS), dando um 503 pontual; (2) depois de **ligar** a autenticação IAM numa instância existente, as conexões ficam lentas por ~1 min.
+- **DR:** o `DbiResourceId` muda na instância restaurada, então a policy `rds-db:connect` precisa ser atualizada (4 s por CLI; medido em [`docs/dr.md`](../dr.md)).
+
+### Opções para a instância (decisão do Leandro)
+
+| Opção | Prós e contras |
+|---|---|
+| Manter IAM no `db.t4g.micro` (como está) | Usuário sem senha e só `CONNECT`; funciona e é estável no laboratório; margem de memória fina e créditos de CPU zerados |
+| IAM em instância maior (ex.: `db.t4g.small`, 2 GiB) | Recupera a folga de memória; custo maior (preço **a verificar**; a tabela de FinOps só traz o do micro) |
+| Voltar ao modo senha (`db_iam_auth = false`) | Sem custo de memória; a app volta a usar o usuário master |
+
+Recomendação: **manter IAM no micro** para a entrega (mostra least privilege até o banco, sem custo extra e com estabilidade medida), documentando o trade-off, e propor o `db.t4g.small` se a carga real exigir folga.
 
 ## Status
 
-Aceito. Implementado no código e coberto por testes unitários (72 testes na app, `terraform test` do módulo `rds`, testes dos scripts), com `terraform validate` e `plan` (54 recursos) limpos. **Não aplicado nem validado na AWS.**
+Aceito. Implementado, coberto por testes (72 na app, `terraform test` do módulo `rds`, testes dos scripts) e **validado na AWS em 14/10/2026** (seção acima). Trade-off de memória medido; decisão sobre a classe da instância pendente do Leandro.

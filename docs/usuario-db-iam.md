@@ -1,6 +1,6 @@
 # Usuário do banco só com CONNECT (autenticação IAM): runbook
 
-Decisão e riscos: [ADR 0013](adr/0013-usuario-da-app-so-connect-via-iam.md). Estado: implementado e testado localmente; **não validado na AWS**.
+Decisão e riscos: [ADR 0013](adr/0013-usuario-da-app-so-connect-via-iam.md). Estado: implementado e **validado na AWS em 14/10/2026** (ver a seção "Validação na AWS" do ADR). Custo medido no `db.t4g.micro`: ~117 MiB de RAM e ~150 MiB de swap.
 
 ## Como funciona
 
@@ -31,6 +31,12 @@ db-init (task efêmera, role própria com GetSecretValue no segredo master)
 - Tentar, com o usuário `app_connect`, criar uma tabela ou ler dados de outro schema: deve falhar.
 - Derrubar a task e confirmar que a nova também conecta (token novo).
 - Comparar `FreeableMemory` antes e depois do primeiro `/connect`.
+
+## Comportamentos medidos na validação
+
+- A **primeira** conexão fria depois de criar o usuário pode dar um 503 pontual (2,0 s = `connectionTimeoutMillis`); a seguinte funciona.
+- Depois de **ligar** a autenticação IAM numa instância já no ar, o `/connect` fica indisponível por ~1 min.
+- O `tools/run-db-init.sh` já roda sem erro no Git Bash (corrigido o `MSYS_NO_PATHCONV`).
 
 ## Quando algo falha
 

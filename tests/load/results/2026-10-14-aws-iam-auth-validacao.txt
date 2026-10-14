@@ -38,3 +38,14 @@ Evidencias transcritas da saida dos comandos (a stack e destruida ao fim da jane
 
 8) FreeableMemory do RDS (CloudWatch, media por minuto) antes e depois do uso de IAM: ~64 a 95 MiB, estavel
    (sem queda visivel apos o primeiro /connect com token IAM). O comportamento sob carga e no soak e registrado a parte.
+
+9) Teste A/B de causa da memoria (mesma instancia db.t4g.micro, 14/10/2026, horario de Brasilia):
+   14:44 a autenticacao IAM foi desligada (modify-db-instance --no-enable-iam-database-authentication --apply-immediately; sem reboot, ~20 s):
+     FreeableMemory  ~58 MiB  ->  ~175 MiB   (+117 MiB, de uma vez)
+     SwapUsage       ~195 MiB ->  ~42 MiB    (-152 MiB)
+     /connect 200 -> 503 (app_connect so entra por IAM)
+   14:55 religada (sem reboot, ~13 s): /connect voltou a 200 so ~1 min depois (as conexoes passaram do connectionTimeoutMillis de 2 s
+   enquanto o caminho IAM do RDS aquecia).
+   Conclusao: a autenticacao IAM custa ~117 MiB de RAM e empurra ~150 MiB para swap no db.t4g.micro (1 GiB).
+   Comparacao com a janela 1 (senha, 13/10): FreeableMemory 152 a 184 MiB, SwapUsage 0,4 a 0,5 MiB, creditos de CPU subindo (1,6 a 18).
+   Dados: 2026-10-14-aws-rds-metricas-iam-vs-senha.csv.

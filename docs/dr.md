@@ -8,7 +8,7 @@ Rótulos: `[FATO: fonte]`, `[HIPÓTESE]` e `[PROPOSTA]`. A decisão de fundo est
 
 | Cenário | RPO | RTO | Como | Estado |
 |---|---|---|---|---|
-| Erro lógico ou corrupção, instância viva, mesma região | Meta de até 5 min (observado ~3 a 8 min, 1 execução) | Meta de 30 a 60 min; restore até banco verificado medido em 16,4 min (1 execução; sem decisão, troca de endpoint e apply) | PITR para nova instância e troca de endpoint | Restore testado; troca de endpoint não |
+| Erro lógico ou corrupção, instância viva, mesma região | Meta de até 5 min (observado ~3 a 8 min, 1 execução) | Meta de 30 a 60 min; restore até banco verificado medido em 16,4 min (13/10) e restore mais troca do endpoint e da policy IAM até a app responder em 18,5 min (14/10); ambos em 1 execução, sem a decisão e sem o apply do Terraform | PITR para nova instância e troca de endpoint | Restore testado; troca de endpoint não |
 | Perda da instância RDS, mesma região | Depende de existir backup (ver "Atenção ao destroy") | Meta de 30 a 60 min, a medir | Restore de backup automático retido ou de snapshot, mais `terraform apply` | Documentado. Sem backup retido com a configuração atual de `dev` |
 | Perda da região | Minutos (replicação de backups automáticos) ou até 24 h (cópia diária de snapshot) | A medir | Recriar a stack noutra região a partir do que foi copiado | Documentado. Não suportado na conta atual sem recursos avançados |
 | Recriação em outra conta | Depende da cópia compartilhada | A medir | Snapshot compartilhado com chave KMS gerenciada pelo cliente | Documentado. Chave padrão não permite |
@@ -52,6 +52,23 @@ Leitura:
 - O RPO observado fica na faixa de **~3 a 8 min** neste teste (uma execução); a meta de 5 min **não é garantia**: o ponto restaurável só ultrapassou o marcador depois de até ~7,9 min.
 - O restore usou o último ponto restaurável, não um instante escolhido. Não foram testados restore a partir de snapshot, outra região nem outra conta.
 - Limites: uma execução, banco praticamente vazio (o tempo de restore cresce com o volume de dados) e retenção de 1 dia (o PITR cobre só as últimas 24 h).
+
+## Teste 2 em 14/10/2026 (RTO com a troca de endpoint e a policy IAM)
+
+[FATO: registro com horários em `tests/load/results/2026-10-14-aws-dr-rto-iam-log.txt`] Com a app em autenticação IAM (ADR 0013), repeti o restore PITR e medi também o que muda a app: apontar a policy `rds-db:connect` para o `DbiResourceId` da instância nova e trocar o `DB_HOST` por uma nova revisão da task definition.
+
+| Parcela (14/10, horário de Brasília) | Tempo |
+|---|---|
+| Restore PITR, pedido às 14:59 até `available` (com IAM ligado) | **953 s (15,9 min)** |
+| Policy `rds-db:connect` atualizada (`create-policy-version`) | **4 s** |
+| Troca do endpoint: nova revisão, `update-service`, task nova estável | **156 s (2,6 min)** |
+| **Pedido do restore até `/connect` = 200 na instância restaurada** | **1.113 s (18,5 min)** |
+
+Leitura:
+- O token IAM é assinado para o host novo, então o 200 prova que a app conectou na instância restaurada. O usuário `app_connect` veio no restore (estava nos dados).
+- No modo IAM o DR tem um passo a mais que o modo senha: o `DbiResourceId` **muda** na instância restaurada, então a policy da task role precisa ser atualizada (4 s por CLI; num DR real vira `terraform apply`).
+- Não foram medidos: a **decisão** do ponto no tempo, o `terraform import`/`apply` para o state passar a apontar a instância nova, e restore a partir de snapshot, outra região ou outra conta. O RTO de um incidente é essa soma, então **18,5 min é um piso**, não o RTO total.
+- Reverti o service e a policy e apaguei a instância restaurada (92 s) antes do destroy.
 
 ## Atenção ao destroy
 

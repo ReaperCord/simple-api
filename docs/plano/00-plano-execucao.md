@@ -24,6 +24,7 @@ Regras fixas: sem commit/push/PR sem pedido; nunca `terraform -chdir` (usar `Set
 | 4 | Carga na AWS (dentro da VPC e pelo API Gateway); conferir cobrança do Cloud Map por `DiscoverInstances` | por requisição (calcular antes) | WP3 | **Concluído 13/10/2026**: parte A (API GW) e parte B (VPC) feitas; ver `docs/performance/benchmark-aws.md`; Cloud Map e custo real conferidos no Cost Explorer em 14/10 (ver `05-custo-real.md`) |
 | 5 | Destroy + `residual-check.sh` (exit 0) ao fim de cada janela | zero | — | **Destroy feito em 13/10/2026** (run 38486943440, 50 destroyed); `residual-check.sh`: varreduras diretas limpas; exit 1 na noite do destroy (índice de tags com atraso e artefatos ECS), **exit 0 em 14/10** após classificar o ECS pelo status real (ver README) |
 | 6 | README "Pendências", `infrastructure/README.md` linha 43 (ADR 0012), higiene (CRLF, alarmes sem destino), repo privado no fim | zero | Resultados reais | Pendente |
+| 7 | **Janela 2 (14/10/2026)**: usuário `app_connect` via IAM validado, séries 2 e 3, soak de 2 h, A/B de memória do RDS e RTO do DR (18,5 min até a app responder na instância restaurada); destroy de 54 recursos; ver `06-janela-2.md` | ≤ ~US$ 1,3 (real: Cost Explorer de 15/10) | — | **Concluído**; falta o custo real |
 | Opc. | Benchmark local (branch só no PC original) e lab EKS | — | — | Se sobrar tempo |
 
 ## Ordem

@@ -1,6 +1,6 @@
 # Janela 2 de AWS: validar o usuário IAM, soak, séries restantes e RTO do DR
 
-Data do desenho: 14/10/2026. Status: **desenho, aguardando OK do Leandro** (apply, destroy e recursos fora do Terraform).
+Data do desenho: 14/10/2026. Status: **executada em 14/10/2026** com o OK do Leandro. Itens 1 a 5 concluídos; resultados em `docs/performance/benchmark-aws.md` (seção "Janela 2"), `docs/dr.md` ("Teste 2") e ADR 0013 ("Validação na AWS"). Custo real: ver `docs/plano/05-custo-real.md` (a atualizar com o Cost Explorer do dia seguinte).
 
 ## O que a janela mede
 

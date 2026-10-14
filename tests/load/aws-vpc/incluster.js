@@ -5,6 +5,7 @@
 // "breakpoint" e uma rampa que ABORTA com erro > 1% ou p99 > 1 s.
 import http from 'k6/http';
 import { check } from 'k6';
+import exec from 'k6/execution';
 
 const TARGET = __ENV.TARGET;
 const PATH_URL = __ENV.PATH_URL || '/connect';
@@ -16,7 +17,28 @@ const WARM_S = 10; // aquecimento descartado (tag step:warm)
 const scenarios = {};
 const thresholds = {};
 
-if (PROFILE === 'breakpoint') {
+const SOAK_RATE = Number(__ENV.SOAK_RATE || 600);
+const SOAK_S = Number(__ENV.SOAK_S || 7200);
+const SOAK_BUCKET_S = 600; // um balde por 10 min para ver deriva de latencia/erro ao longo do tempo
+const soakBuckets = Math.ceil(SOAK_S / SOAK_BUCKET_S);
+const bname = (i) => `b${String(i).padStart(2, '0')}`;
+
+if (PROFILE === 'soak') {
+  scenarios.soak = {
+    executor: 'constant-arrival-rate',
+    rate: SOAK_RATE,
+    timeUnit: '1s',
+    duration: `${SOAK_S}s`,
+    preAllocatedVUs: 100,
+    maxVUs: 1500,
+  };
+  for (let i = 0; i < soakBuckets; i++) {
+    const b = bname(i);
+    thresholds[`http_req_duration{bucket:${b}}`] = ['max>=0'];
+    thresholds[`http_req_failed{bucket:${b}}`] = ['rate>=0'];
+    thresholds[`http_reqs{bucket:${b}}`] = ['count>=0'];
+  }
+} else if (PROFILE === 'breakpoint') {
   scenarios.ramp = {
     executor: 'ramping-arrival-rate',
     startRate: 100,
@@ -66,7 +88,11 @@ export const options = {
 };
 
 export function run() {
-  const r = http.get(`http://${TARGET}${PATH_URL}`, { timeout: '5s' });
+  const params = { timeout: '5s' };
+  if (PROFILE === 'soak') {
+    params.tags = { bucket: bname(Math.min(Math.floor(exec.instance.currentTestRunDuration / (SOAK_BUCKET_S * 1000)), soakBuckets - 1)) };
+  }
+  const r = http.get(`http://${TARGET}${PATH_URL}`, params);
   check(r, { ok: (x) => x.status === 200 });
 }
 export default run;
@@ -78,7 +104,17 @@ function pick(m, key) {
 export function handleSummary(data) {
   const m = data.metrics;
   const out = { profile: PROFILE, duration_ms: Math.round(data.state.testRunDurationMs), steps: [] };
-  if (PROFILE === 'breakpoint') {
+  if (PROFILE === 'soak') {
+    out.buckets = [];
+    for (let i = 0; i < soakBuckets; i++) {
+      const b = bname(i);
+      const d = pick(m, `http_req_duration{bucket:${b}}`) || {};
+      const f = pick(m, `http_req_failed{bucket:${b}}`) || {};
+      const n = pick(m, `http_reqs{bucket:${b}}`) || {};
+      out.buckets.push({ b, reqs: n.count || 0, p50: d['p(50)'], p95: d['p(95)'], p99: d['p(99)'], max: d.max, erro_pct: 100 * (f.rate || 0) });
+    }
+    out.dropped = (pick(m, 'dropped_iterations') || {}).count || 0;
+  } else if (PROFILE === 'breakpoint') {
     const d = pick(m, 'http_req_duration') || {};
     const f = pick(m, 'http_req_failed') || {};
     const maxRate = Number(__ENV.MAX_RATE || 1500);

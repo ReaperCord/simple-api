@@ -103,6 +103,42 @@ Leitura:
 
 Limites: uma única execução; início do salto estimado (±5 s); CPU só com granularidade de 1 min; o monitor amostra a cada ~5 s. Custo real (Cost Explorer, `docs/plano/05-custo-real.md`): o dia inteiro somou 1.078.187 requisições no API Gateway = US$ 1,078 (todas as partes, não só o spike) e US$ 0,073 de Cloud Map (72.921 chamadas).
 
+## Janela 2 (14/10/2026): séries 2 e 3, soak de 2 h e o efeito da autenticação IAM no RDS
+
+**Rótulo: AWS (modo IAM).** Mesmo gerador, mesma rota (`/connect`) e mesmos perfis da parte B, mas agora com a app em `DB_AUTH_MODE=iam` (usuário `app_connect`, token IAM, ADR 0013), imagem `00527fb`, **task nova da API em cada série** (`update-service --force-new-deployment`), autoscaling suspenso. Horários em Brasília. Dados: `tests/load/results/2026-10-14-aws-vpc-series23.csv`, `…-series23-raw.json`, `…-soak-600rps.csv`, `…-rds-metricas-iam-vs-senha.csv` e `…-iam-auth-validacao.txt`.
+
+### Três séries por perfil (todas com 0% de erro)
+
+| Perfil e taxa | Série 1 (13/10, senha) | Série 2 (14/10, IAM) | Série 3 (14/10, IAM) |
+|---|---|---|---|
+| load 500 req/s: p50 / p99 | 1,06 / 6,8 ms | 1,44 / 10,2 ms | 1,44 / **1.078 ms** (570 descartadas) |
+| load, CPU da API (pico por minuto) | 33% | 42% | 56% |
+| stress 1.000 req/s: p50 / p99 | 0,94 / 7,9 ms | 1,08 / 41 ms | 1,45 / 116 ms |
+| stress, CPU da API (pico) | 65% | 78% | 86% |
+| breakpoint 100→1.500 req/s: p95 / p99 | 1,95 / 54 ms | 23 / 206 ms | 41 / 223 ms |
+| breakpoint, CPU da API (pico) | 85% | 99% | **100%** |
+
+- Nenhum perfil teve erro nem aborto; o breakpoint (erro > 1% ou p99 > 1 s) **continua não atingido** até 1.500 req/s, mas com a CPU da task em 99–100% nas séries 2 e 3.
+- A **variação entre séries é grande** (CPU a 500 req/s: 33% → 42% → 56%). O soak (abaixo), que também usou uma task nova, ficou melhor que todas. **Hipótese, não verificada:** a variação vem de a task nova cair em hosts Fargate diferentes. Por isso **uma série só não vale como capacidade**; o intervalo honesto para esta task de 0,5 vCPU é: 500 req/s consomem de 33% a 56% da CPU, e 1.000 req/s de 65% a 86%.
+
+### Soak: 2 h a 600 req/s dentro da VPC (task nova, 12:35 a 14:36)
+
+4,32 milhões de requisições, **0% de erro**, 396 iterações descartadas. Por bloco de 10 min: p50 0,84 a 0,90 ms (plano), p95 1,13 a 1,30 ms, p99 9 a 33 ms (picos pontuais, sem tendência), máximo até 825 ms. CPU da API: média 38,5%, pico 40,8%. **Sem deriva de latência ao longo das 2 h.**
+
+### RDS `db.t4g.micro`: o custo da autenticação IAM (medido)
+
+| Métrica do RDS | Janela 1 (senha) | Janela 2 (IAM, durante as séries e o soak) |
+|---|---|---|
+| Memória livre | 152 a 184 MiB | **52 a 68 MiB** |
+| Swap em uso | 0,4 a 0,5 MiB | **134 a 201 MiB** (médias de 5 min; no CSV de 15 min, 148 a 201) |
+| Créditos de CPU | sobem de 1,6 a 18 | **~0** (modo *unlimited*) |
+| Créditos excedentes cobrados | 0 | **0** (nenhuma cobrança extra na janela) |
+| CPU do banco | 4 a 11% | 6 a 14% |
+
+**Teste A/B na mesma instância (causa confirmada):** às 14:44 a autenticação IAM foi desligada (`modify-db-instance`, sem reboot, ~20 s): a memória livre saltou de ~58 para **~175 MiB** e o swap caiu de ~195 para **~42 MiB**, de uma vez. Religada às 14:55 (~13 s), o `/connect` só voltou a 200 cerca de **1 min depois**: as conexões passaram do `connectionTimeoutMillis` de 2 s enquanto o caminho IAM do RDS aquecia. Conclusão: a autenticação IAM custa **~117 MiB de RAM e empurra ~150 MiB para swap** no `db.t4g.micro` (1 GiB).
+
+Limites: uma execução de cada coisa; as séries mudaram duas variáveis ao mesmo tempo entre as janelas (IAM e task nova), então a **diferença de CPU da API entre a série 1 e as demais não pode ser atribuída ao IAM** (o soak, com IAM, usou menos CPU que a série 1 a taxa comparável); o efeito do IAM na **memória do banco** é o que o A/B prova.
+
 ## O que isto NÃO mostra
 
 - Não valida o SLO "via API GW, cliente em us-east-1" (p50 ≤ 25 ms): o cliente está no Brasil. A latência da app (≈ 1 ms) e a da rede (~130 ms) estão separadas acima.
