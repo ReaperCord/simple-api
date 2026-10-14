@@ -272,13 +272,14 @@ Só entram números da tabela de preços de [`02-finops-guardrails.md`](.kiro/st
 | [`docs/performance/benchmark-local.md`](docs/performance/benchmark-local.md) | Resumo dos CSV do benchmark LOCAL, conferido com a steering |
 | [`docs/performance/benchmark-aws.md`](docs/performance/benchmark-aws.md) | Carga na AWS (API Gateway e dentro da VPC), rotulada AWS, com ressalvas |
 | [`docs/plano/`](docs/plano/00-plano-execucao.md) | Plano de execução, auditoria de IAM da `gha-infra`, FinOps do apply e desenho da carga na VPC |
+| [`docs/verificacoes/`](docs/verificacoes/2026-10-13-estado-final.md) | Verificação das afirmações dos docs contra dados e estado real (13/10/2026) |
 | [`docs/adr/`](docs/adr/README.md) | Decisões de arquitetura |
 | [`docs/KIRO-SETUP.md`](docs/KIRO-SETUP.md) | Pacote de guardrails de agentes de IA |
 | [`AGENTS.md`](AGENTS.md) | Contrato de trabalho e regras anti-alucinação |
 
 ## Pendências
 
-Estado em 13/10/2026: a stack foi criada na AWS e testada (resultados em [`docs/performance/benchmark-aws.md`](docs/performance/benchmark-aws.md) e no plano de execução em [`docs/plano/`](docs/plano/00-plano-execucao.md)). Abaixo, o que foi verificado e o que continua sem verificação.
+Estado em 13/10/2026 (fim da janela): a stack foi criada na AWS, testada e **destruída** (o bootstrap permanece). Resultados em [`docs/performance/benchmark-aws.md`](docs/performance/benchmark-aws.md) e no plano de execução em [`docs/plano/`](docs/plano/00-plano-execucao.md)). Abaixo, o que foi verificado e o que continua sem verificação.
 
 **Verificado na AWS**
 - Bootstrap aplicado (state local, nunca versionado): bucket de state, ECR, budget, provedor OIDC, roles `gha-plan`, `gha-deploy` e `gha-infra` e o Resource Group `kxc-simple-api-RG` (por tag `Project`). GitHub configurado: environments `deploy` e `infra` (com aprovação) e variáveis do repositório.
@@ -294,7 +295,7 @@ Estado em 13/10/2026: a stack foi criada na AWS e testada (resultados em [`docs/
 - Soak de 2 h e 3 séries por perfil (cada série usou a mesma task); throttling de CPU do Fargate não medido. O spike foi feito com o throttling do estágio elevado temporariamente (restaurado em 50/100).
 - Rotação de 7 dias do segredo: a app invalida o cache em `28P01` (testado com cliente falso), mas uma rotação real não foi exercitada.
 - Conectividade das tasks até ECR, CloudWatch Logs e Secrets Manager por IP público, sem NAT nem endpoints: funcionou nos testes, sem análise de falhas.
-- Destroy completo e `tools/residual-check.sh` com exit 0 desta janela: ver o plano de execução.
+- **Destroy executado** pelo `infra.yml` (run 38486943440: 0 to add, 0 to change, 50 to destroy; gate `infra` aprovado). Conferência com `tools/residual-check.sh`: as 19 varreduras diretas (VPC, ENIs, EIPs, NAT, EBS, RDS e snapshots, segredos, alarmes, log groups, Cloud Map, Route 53, API Gateway, VPC Link, LB, EKS, EC2) deram "nada encontrado", mas **o script saiu com código 1**: o índice de tags (Resource Groups Tagging API) continuava listando 12 itens já removidos ou `INACTIVE` (cluster e service ECS `INACTIVE`, 7 regras de SG que a API EC2 já não encontra, task definitions). Verificado direto: cluster `INACTIVE`, regras de SG `NotFound`, nenhuma VPC do projeto. As task definitions `simple-api-dev:1` e `:2` ficam `ACTIVE` por `skip_destroy = true` (sem custo). Não foi possível declarar "exit 0".
 
 **Build, testes e CI**
 - Build `linux/arm64` verificado no CI (PR #1) e no `deploy.yml`. O build arm64 local não é possível (o builder do Docker Desktop não tem QEMU). Não foi verificado se `TRIVY_PLATFORM` chega ao scan arm64 do `deploy.yml`.
