@@ -217,7 +217,7 @@ jobs:
           set -euo pipefail
           kubectl -n argocd wait --for=jsonpath='{.status.sync.status}'=Synced application/simple-api --timeout=600s
           kubectl -n argocd wait --for=jsonpath='{.status.health.status}'=Healthy application/simple-api --timeout=900s
-          for i in $(seq 1 60); do
+          for _ in $(seq 1 60); do
             host="$(kubectl -n simple-api get service simple-api -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || true)"
             [[ -n "${host}" ]] && break
             sleep 10
@@ -269,8 +269,8 @@ jobs:
           aws eks update-kubeconfig --name "${CLUSTER_NAME}"
           kubectl -n argocd delete application simple-api --ignore-not-found --wait --timeout=300s || true
           kubectl -n simple-api delete service simple-api --ignore-not-found --wait --timeout=300s || true
-          for i in $(seq 1 30); do
-            n="$(aws elbv2 describe-load-balancers --query 'length(LoadBalancers[?contains(LoadBalancerName, `k8s-`)])' --output text 2>/dev/null || echo 0)"
+          for _ in $(seq 1 30); do
+            n="$(aws elbv2 describe-load-balancers --query "length(LoadBalancers[?starts_with(LoadBalancerName, 'k8s-')])" --output text 2>/dev/null || echo 0)"
             [[ "${n}" == "0" ]] && break
             echo "aguardando o NLB ser removido (${n})..."; sleep 10
           done

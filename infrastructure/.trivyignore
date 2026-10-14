@@ -26,3 +26,18 @@ AWS-0052
 # [2026-10-13] AWS-0053 (HIGH): ALB exposto a internet (internal = var.internal, avaliado como false).
 # Justificativa: mesmo modulo legado nao instanciado. Reavaliar antes de qualquer uso futuro do modulo.
 AWS-0053
+
+# [2026-10-14] AWS-0040 (CRITICAL) e AWS-0041 (CRITICAL): endpoint publico do plano de controle do EKS do lab, aberto a 0.0.0.0/0.
+# Justificativa: o workflow eks-lab.yml roda em runner hospedado do GitHub (faixa de IPs enorme e variavel) e precisa falar
+# com a API do Kubernetes (kubectl e helm); o endpoint privado exigiria rodar dentro da VPC. O acesso continua exigindo
+# credencial IAM valida (authentication_mode = API, access entries) e o lab vive no maximo 6 h (TTL e destroy agendado).
+# Compensacao: nenhum Secret e guardado no cluster (autenticacao IAM do RDS por Pod Identity, ADR 0013). Reavaliar se o
+# lab passar a viver mais que o TTL. Local: infrastructure/eks-lab/main.tf (aws_eks_cluster.this, vpc_config).
+AWS-0040
+AWS-0041
+
+# [2026-10-14] AWS-0039 (HIGH): cluster EKS do lab sem criptografia de secrets com chave KMS.
+# Justificativa: a chave gerenciada pelo cliente tem custo mensal e exige permissoes extras de KMS na role do pipeline;
+# o lab e efemero (ate 6 h) e nao guarda segredos no cluster (sem senha de banco, sem credencial AWS estatica: Pod Identity
+# e autenticacao IAM do RDS). Reavaliar antes de guardar qualquer Secret no cluster. Local: infrastructure/eks-lab/main.tf.
+AWS-0039
