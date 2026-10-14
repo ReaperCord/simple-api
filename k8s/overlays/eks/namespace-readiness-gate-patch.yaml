@@ -1,0 +1,10 @@
+# Pod readiness gate do AWS Load Balancer Controller: o pod novo so fica Ready quando o alvo dele esta healthy no
+# target group do NLB. Sem isso, com 1 replica, o rolling update tirava o pod antigo antes de o novo receber trafego
+# (medido na janela 3: 8 de 118 requisicoes em timeout durante o restart).
+# https://kubernetes-sigs.github.io/aws-load-balancer-controller/latest/deploy/pod_readiness_gate/
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: simple-api
+  labels:
+    elbv2.k8s.aws/pod-readiness-gate-inject: enabled
