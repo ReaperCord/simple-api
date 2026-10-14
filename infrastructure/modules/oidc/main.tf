@@ -890,7 +890,7 @@ data "aws_iam_policy_document" "eks_lab_iam" {
     condition {
       test     = "StringEquals"
       variable = "iam:PassedToService"
-      values   = ["eks.amazonaws.com", "ec2.amazonaws.com"]
+      values   = ["eks.amazonaws.com", "ec2.amazonaws.com", "pods.eks.amazonaws.com"] # pods.*: Pod Identity (3o erro da janela 3)
     }
   }
 
