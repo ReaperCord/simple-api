@@ -688,14 +688,15 @@ data "aws_iam_policy_document" "eks_lab" {
     effect    = "Allow"
     resources = ["*"]
     actions = [
-      "eks:Describe*",                              # refresh do cluster, node group, add-ons e Pod Identity
-      "eks:List*",                                  # listagens (o destroy agendado procura clusters vencidos por tag)
-      "ec2:Describe*",                              # refresh de VPC, subnets, SGs, ENIs e instancias dos nos
-      "elasticloadbalancing:DescribeLoadBalancers", # data.aws_lb e a espera do NLB criado pelo controller
-      "elasticloadbalancing:DescribeListeners",     # data.aws_lb_listener (ARN do listener do NLB)
-      "elasticloadbalancing:DescribeTags",          # data.aws_lb por tag service.k8s.aws/stack
-      "iam:ListRolePolicies",                       # refresh das roles do lab
-      "iam:ListAttachedRolePolicies",               # refresh dos anexos das roles do lab
+      "eks:Describe*",                                       # refresh do cluster, node group, add-ons e Pod Identity
+      "eks:List*",                                           # listagens (o destroy agendado procura clusters vencidos por tag)
+      "ec2:Describe*",                                       # refresh de VPC, subnets, SGs, ENIs e instancias dos nos
+      "elasticloadbalancing:DescribeLoadBalancers",          # data.aws_lb e a espera do NLB criado pelo controller
+      "elasticloadbalancing:DescribeLoadBalancerAttributes", # data.aws_lb (medido no log do provider 6.68.0, janela 3)
+      "elasticloadbalancing:DescribeListeners",              # data.aws_lb_listener (ARN do listener do NLB)
+      "elasticloadbalancing:DescribeTags",                   # data.aws_lb por tag service.k8s.aws/stack
+      "iam:ListRolePolicies",                                # refresh das roles do lab
+      "iam:ListAttachedRolePolicies",                        # refresh dos anexos das roles do lab
     ]
 
     condition {
@@ -791,6 +792,14 @@ data "aws_iam_policy_document" "eks_lab" {
       variable = "aws:RequestedRegion"
       values   = [var.region]
     }
+  }
+
+  # Precaucao (nao comprovado como necessario): a integracao usa o VPC link da stack principal; so leitura, sem POST/DELETE.
+  statement {
+    sid       = "ApiGatewayReadVpcLink"
+    effect    = "Allow"
+    actions   = ["apigateway:GET"]
+    resources = ["${local.apigateway_arn}/vpclinks/*"]
   }
 
   statement {
