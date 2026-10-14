@@ -89,3 +89,9 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "iam_database_authentication_enabled" {
+  description = "Habilita a autenticacao IAM do RDS (token no lugar de senha) para usuarios com a role rds_iam. Exige memoria livre na instancia (a doc da AWS cita 300 a 1000 MiB; atencao em classes burstable)"
+  type        = bool
+  default     = false
+}

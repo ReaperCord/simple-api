@@ -23,6 +23,7 @@ Convenções usadas nos ADRs:
 | [0010](0010-regras-de-sg-por-chaves-simbolicas.md) | Regras de SG por chaves simbólicas em vez de `templatefile()` | Aceito, implementado e coberto por `terraform test` |
 | [0011](0011-dr-via-pitr.md) | Recuperação de desastre por backups automáticos e PITR | Aceito como plano, não implementado e não testado |
 | [0012](0012-divergencia-da-arquitetura-alvo.md) | Divergência consciente da arquitetura alvo (ALB e NAT) | Aceito, implementado, não aplicado |
+| [0013](0013-usuario-da-app-so-connect-via-iam.md) | Usuário da app só com CONNECT, via autenticação IAM do RDS | Aceito, implementado e testado localmente, não validado na AWS |
 
 ## Outros documentos de arquitetura
 

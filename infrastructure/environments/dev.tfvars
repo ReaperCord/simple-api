@@ -105,3 +105,12 @@ api_throttling_burst_limit = 100 # [PROPOSTA] a calibrar com o baseline de carga
 alarm_rds_cpu_credit_balance_min = 20         # [PROPOSTA] a calibrar
 alarm_rds_free_storage_min_bytes = 2147483648 # [PROPOSTA] a calibrar (2 GiB)
 alarm_api_5xx_max                = 5          # [PROPOSTA] a calibrar (respostas 5xx em 5 minutos)
+
+#==========================================================================
+# AUTENTICACAO DO BANCO
+#==========================================================================
+# true: a app entra como db_app_username (so CONNECT) com token IAM, sem senha guardada e sem acesso ao
+# segredo master. Depois do apply, rode tools/run-db-init.sh UMA vez (cria o usuario); ate la /connect responde 503.
+# A escolha vale desde o primeiro apply (o service ignora mudancas de task definition). Ver docs/usuario-db-iam.md.
+db_iam_auth     = true
+db_app_username = "app_connect"

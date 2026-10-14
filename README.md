@@ -307,7 +307,7 @@ Estado em 13/10/2026 (fim da janela): a stack foi criada na AWS, testada e **des
 
 **Segurança**
 - A API é pública e sem autenticação (contrato do desafio).
-- A aplicação usa o usuário master do banco. Um usuário só com `CONNECT` é pendência documentada.
+- Usuário do banco só com `CONNECT`: **implementado** (autenticação IAM do RDS, [ADR 0013](docs/adr/0013-usuario-da-app-so-connect-via-iam.md), runbook em [`docs/usuario-db-iam.md`](docs/usuario-db-iam.md)) e testado localmente, mas **não validado na AWS**. Risco aberto: a doc da AWS cita 300 a 1000 MiB de memória extra para a autenticação IAM e o `db.t4g.micro` tem 1 GiB. Até a validação, o `dev.tfvars` já está em `db_iam_auth = true` para o próximo apply; com `false` volta ao modo anterior (master).
 - A role `gha-infra` cria roles e policies com prefixo `simple-api-*` com conteúdo livre (escalada dentro do prefixo). O IAM Access Analyzer não foi usado para validar as policies.
 - O `infra.yml` tem um job só: a aprovação acontece antes do plan ser visto. Separar `plan` e `apply` é melhoria pendente.
 - O `trivy-action` roda no job do `deploy.yml` que tem credenciais AWS temporárias, e o job `plan` do `ci.yml` executa HCL do próprio PR com a role de leitura.

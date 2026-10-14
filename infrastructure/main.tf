@@ -198,7 +198,10 @@ module "rds" {
   deletion_protection       = var.db_deletion_protection
   skip_final_snapshot       = var.db_skip_final_snapshot
   final_snapshot_identifier = var.db_final_snapshot_identifier
-  tags                      = merge({ Name = "${local.name}-db" }, local.shared_tags)
+
+  iam_database_authentication_enabled = var.db_iam_auth
+
+  tags = merge({ Name = "${local.name}-db" }, local.shared_tags)
 }
 
 #==========================================================================
@@ -269,10 +272,41 @@ data "aws_iam_policy_document" "execution" {
 }
 
 data "aws_iam_policy_document" "task" {
+  # Modo senha (db_iam_auth = false): a app le a senha master (rotacionada a cada 7 dias) do segredo gerenciado.
+  dynamic "statement" {
+    for_each = var.db_iam_auth ? [] : [1]
+    content {
+      sid       = "ReadDatabaseSecret"
+      effect    = "Allow"
+      actions   = ["secretsmanager:GetSecretValue"] # a app le a senha do RDS (rotacionada a cada 7 dias) ao abrir conexao
+      resources = [module.rds.master_user_secret_arn]
+    }
+  }
+
+  # Modo IAM (db_iam_auth = true): so conectar como o usuario da app, em UMA instancia. Nenhum acesso a segredo.
+  # Formato do ARN: https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/UsingWithRDS.IAMDBAuth.IAMPolicy.html
+  dynamic "statement" {
+    for_each = var.db_iam_auth ? [1] : []
+    content {
+      sid       = "ConnectAsAppUser"
+      effect    = "Allow"
+      actions   = ["rds-db:connect"] # gerar o token de autenticacao IAM do RDS
+      resources = ["arn:${data.aws_partition.current.partition}:rds-db:${var.region}:${data.aws_caller_identity.current.account_id}:dbuser:${module.rds.resource_id}/${var.db_app_username}"]
+    }
+  }
+}
+
+# ---------------------------------------------------------------------------------------------
+# db-init: tarefa UNICA (rodada a mao) que cria o usuario da app no banco com a credencial master.
+# Role propria: a role da API no modo IAM nao pode ler o segredo master. So existe no modo IAM.
+# ---------------------------------------------------------------------------------------------
+data "aws_iam_policy_document" "dbinit" {
+  count = var.db_iam_auth ? 1 : 0
+
   statement {
-    sid       = "ReadDatabaseSecret"
+    sid       = "ReadMasterSecret"
     effect    = "Allow"
-    actions   = ["secretsmanager:GetSecretValue"] # a app le a senha do RDS (rotacionada a cada 7 dias) ao abrir conexao
+    actions   = ["secretsmanager:GetSecretValue"] # le a senha master para criar o usuario da app
     resources = [module.rds.master_user_secret_arn]
   }
 }
@@ -291,6 +325,15 @@ module "task_role" {
   role_name               = local.task_role_name
   assume_role_policy_json = data.aws_iam_policy_document.ecs_tasks_assume.json
   policy_json             = data.aws_iam_policy_document.task.json
+}
+
+module "dbinit_role" {
+  source = "./modules/security/iam-role"
+  count  = var.db_iam_auth ? 1 : 0
+
+  role_name               = "${local.name}-dbinit"
+  assume_role_policy_json = data.aws_iam_policy_document.ecs_tasks_assume.json
+  policy_json             = data.aws_iam_policy_document.dbinit[0].json
 }
 
 #==========================================================================
@@ -316,18 +359,78 @@ module "ecs" {
   service_registry_arn  = module.cloudmap.service_arn
   log_retention_in_days = var.log_retention_in_days
 
-  # Nenhuma senha aqui: a app le o segredo do RDS no Secrets Manager (DB_SECRET_ARN).
-  environment_variables = [
-    { name = "API_PORT", value = tostring(var.container_port) },
-    { name = "DB_HOST", value = module.rds.address },
-    { name = "DB_PORT", value = tostring(module.rds.port) },
-    { name = "DB_DATABASE", value = module.rds.db_name },
-    { name = "DB_USER", value = var.db_username },
-    { name = "DB_SSLMODE", value = "verify-full" },
-    { name = "DB_POOL_MAX", value = tostring(var.db_pool_max) },
-    { name = "DB_SECRET_ARN", value = module.rds.master_user_secret_arn },
-    { name = "LOG_LEVEL", value = var.log_level },
-  ]
+  # Nenhuma senha aqui: modo senha le o segredo do RDS (DB_SECRET_ARN); modo IAM gera um token (DB_AUTH_MODE=iam).
+  environment_variables = concat(
+    [
+      { name = "API_PORT", value = tostring(var.container_port) },
+      { name = "DB_HOST", value = module.rds.address },
+      { name = "DB_PORT", value = tostring(module.rds.port) },
+      { name = "DB_DATABASE", value = module.rds.db_name },
+      { name = "DB_SSLMODE", value = "verify-full" },
+      { name = "DB_POOL_MAX", value = tostring(var.db_pool_max) },
+      { name = "LOG_LEVEL", value = var.log_level },
+    ],
+    var.db_iam_auth ? [
+      { name = "DB_AUTH_MODE", value = "iam" },
+      { name = "DB_USER", value = var.db_app_username },
+      { name = "AWS_REGION", value = var.region },
+      ] : [
+      { name = "DB_USER", value = var.db_username },
+      { name = "DB_SECRET_ARN", value = module.rds.master_user_secret_arn },
+    ],
+  )
+}
+
+# Revisao unica do db-init (mesma imagem da app, comando trocado). Rodada com tools/run-db-init.sh.
+resource "aws_ecs_task_definition" "dbinit" {
+  count = var.db_iam_auth ? 1 : 0
+
+  family                   = "${local.name}-dbinit"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = "256"
+  memory                   = "512"
+  execution_role_arn       = module.execution_role.role_arn
+  task_role_arn            = module.dbinit_role[0].role_arn
+  skip_destroy             = true
+
+  runtime_platform {
+    operating_system_family = "LINUX"
+    cpu_architecture        = "ARM64"
+  }
+
+  container_definitions = jsonencode([
+    {
+      name                   = "db-init"
+      image                  = "${data.aws_ecr_repository.this.repository_url}:${var.image_tag}"
+      essential              = true
+      command                = ["node", "src/db-init.js"]
+      readonlyRootFilesystem = true
+
+      environment = [
+        { name = "DB_HOST", value = module.rds.address },
+        { name = "DB_PORT", value = tostring(module.rds.port) },
+        { name = "DB_DATABASE", value = module.rds.db_name },
+        { name = "DB_USER", value = var.db_username },
+        { name = "DB_SECRET_ARN", value = module.rds.master_user_secret_arn },
+        { name = "DB_SSLMODE", value = "verify-full" },
+        { name = "DB_POOL_MAX", value = "1" },
+        { name = "DB_APP_USER", value = var.db_app_username },
+      ]
+
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          "awslogs-group"         = "/ecs/${local.name}"
+          "awslogs-region"        = var.region
+          "awslogs-stream-prefix" = "dbinit"
+        }
+      }
+    }
+  ])
+
+  # O log group nasce no modulo ecs; a task so roda depois do apply, mas a dependencia deixa explicito.
+  depends_on = [module.ecs]
 }
 
 #==========================================================================

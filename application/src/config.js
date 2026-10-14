@@ -2,6 +2,7 @@
 
 const LOG_LEVELS = ['debug', 'info', 'warn', 'error'];
 const SSL_MODES = ['verify-full', 'disable'];
+const AUTH_MODES = ['password', 'iam'];
 
 class ConfigError extends Error {
   constructor(message) {
@@ -42,11 +43,38 @@ function loadConfig(env = process.env) {
     throw new ConfigError(`LOG_LEVEL invalido: "${logLevel}". Use ${LOG_LEVELS.join(', ')}`);
   }
 
-  // DB_SECRET_ARN presente: a senha vem do Secrets Manager e DB_PASSWORD e ignorada.
-  const secretArn = env.DB_SECRET_ARN || undefined;
-  const password = secretArn ? undefined : env.DB_PASSWORD;
-  if (!secretArn && !password) {
-    throw new ConfigError('DB_PASSWORD e obrigatoria quando DB_SECRET_ARN nao esta definido');
+  const authMode = env.DB_AUTH_MODE || 'password';
+  if (!AUTH_MODES.includes(authMode)) {
+    throw new ConfigError(
+      `DB_AUTH_MODE invalido: "${authMode}". Use ${AUTH_MODES.join(' ou ')}`,
+    );
+  }
+
+  let secretArn;
+  let password;
+  let region;
+  if (authMode === 'iam') {
+    // Autenticacao IAM do RDS: sem senha guardada. O usuario do banco (DB_USER) so precisa de CONNECT.
+    if (sslMode !== 'verify-full') {
+      throw new ConfigError('DB_AUTH_MODE=iam exige DB_SSLMODE=verify-full');
+    }
+    if (!env.DB_HOST || !env.DB_USER) {
+      throw new ConfigError('DB_HOST e DB_USER sao obrigatorios quando DB_AUTH_MODE=iam');
+    }
+    region = env.AWS_REGION || env.AWS_DEFAULT_REGION || undefined;
+    if (!region) {
+      throw new ConfigError('AWS_REGION e obrigatoria quando DB_AUTH_MODE=iam');
+    }
+    if (env.DB_SECRET_ARN || env.DB_PASSWORD) {
+      throw new ConfigError('DB_AUTH_MODE=iam nao usa DB_SECRET_ARN nem DB_PASSWORD; remova-as');
+    }
+  } else {
+    // DB_SECRET_ARN presente: a senha vem do Secrets Manager e DB_PASSWORD e ignorada.
+    secretArn = env.DB_SECRET_ARN || undefined;
+    password = secretArn ? undefined : env.DB_PASSWORD;
+    if (!secretArn && !password) {
+      throw new ConfigError('DB_PASSWORD e obrigatoria quando DB_SECRET_ARN nao esta definido');
+    }
   }
 
   return {
@@ -63,8 +91,10 @@ function loadConfig(env = process.env) {
       sslMode,
       sslCaFile,
       secretArn,
+      authMode,
+      region,
     },
   };
 }
 
-module.exports = { loadConfig, ConfigError, LOG_LEVELS, SSL_MODES };
+module.exports = { loadConfig, ConfigError, LOG_LEVELS, SSL_MODES, AUTH_MODES };

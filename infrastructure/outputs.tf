@@ -62,3 +62,13 @@ output "cloudmap_service_arn" {
   description = "ARN do servico Cloud Map (registro SRV)"
   value       = module.cloudmap.service_arn
 }
+
+output "db_init_task_definition_arn" {
+  description = "ARN da task definition do db-init (so no modo IAM; rode com tools/run-db-init.sh depois do apply)"
+  value       = one(aws_ecs_task_definition.dbinit[*].arn)
+}
+
+output "db_app_username" {
+  description = "Usuario do banco usado pela app (modo IAM) ou null no modo senha"
+  value       = var.db_iam_auth ? var.db_app_username : null
+}

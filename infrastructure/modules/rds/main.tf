@@ -19,6 +19,10 @@ resource "aws_db_instance" "this" {
   # Nenhuma senha passa pelo Terraform nem pelo state (03-devsecops.md).
   manage_master_user_password = true
 
+  # Autenticacao IAM (opcional): a app entra como um usuario so com CONNECT, sem senha guardada.
+  # A senha master continua gerenciada pelo RDS; o usuario master NAO ganha a role rds_iam.
+  iam_database_authentication_enabled = var.iam_database_authentication_enabled
+
   storage_type          = "gp3"
   allocated_storage     = var.allocated_storage
   max_allocated_storage = var.max_allocated_storage
