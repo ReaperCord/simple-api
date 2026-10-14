@@ -900,7 +900,13 @@ data "aws_iam_policy_document" "eks_lab_iam" {
     sid       = "IamReadServiceLinkedRolesEks"
     effect    = "Allow"
     actions   = ["iam:GetRole"] # so leitura, so roles de servico
-    resources = ["arn:${local.partition}:iam::${local.account_id}:role/aws-service-role/*"]
+    resources = [
+      "arn:${local.partition}:iam::${local.account_id}:role/aws-service-role/*",
+      # Role ainda inexistente: o IAM avalia o GetRole pelo ARN SEM o path (confirmado no simulador e no 2o erro da janela 3).
+      "arn:${local.partition}:iam::${local.account_id}:role/AWSServiceRoleForAmazonEKS",
+      "arn:${local.partition}:iam::${local.account_id}:role/AWSServiceRoleForAmazonEKSNodegroup",
+      "arn:${local.partition}:iam::${local.account_id}:role/AWSServiceRoleForElasticLoadBalancing",
+    ]
   }
 
   # Primeiro uso de EKS, node group e Elastic Load Balancing na conta.
