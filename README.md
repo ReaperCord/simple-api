@@ -314,7 +314,7 @@ Estado em 13/10/2026 (fim da janela): a stack foi criada na AWS, testada e **des
 - A saída das tasks em 443 e 53 para `0.0.0.0/0` é necessária sem NAT, mas é ampla.
 - O SHA-256 do CA bundle da RDS foi medido uma vez localmente (a AWS não publica checksum).
 - O repositório é público e o account id aparece nos logs das Actions (via OIDC): considerar torná-lo privado ao final.
-- O hook local do gitleaks (`.pre-commit-config.yaml`) não existe; o gitleaks roda só no CI.
+- O hook local do gitleaks existe em [`.pre-commit-config.yaml`](.pre-commit-config.yaml) (mesma versão do CI, 8.30.1; instalar com `pip install pre-commit && pre-commit install`). Validado em 14/10/2026: bloqueia um segredo falso no stage (`github-pat`, exit 1) e passa sem nada staged. Ele só olha o que está staged; o histórico completo continua sendo coberto pelo `gitleaks git` do CI.
 
 **DR**
 - Um restore PITR real foi testado (13/10/2026): pedido até instância `available` em 15,4 min e marcador verificado em 16,4 min; RPO observado de ~3 a 8 min (uma execução, banco quase vazio). O RTO total de um incidente (decisão, troca de endpoint, `terraform apply`) não foi medido; cópia entre regiões e snapshot entre contas não foram testados.
