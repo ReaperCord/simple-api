@@ -142,8 +142,7 @@ jobs:
           aws eks update-kubeconfig --name "${CLUSTER_NAME}"
           kubectl wait --for=condition=Ready node --all --timeout=600s
           kubectl get nodes
-          # APIServices agregadas (metrics-server) indisponiveis fazem o helm falhar na validacao
-          # ("the server is currently unable to handle the request", visto na janela 3).
+          # Protecao: o metrics-server (APIService agregada) precisa estar disponivel para o HPA e o `kubectl top`.
           kubectl wait --for=condition=Available apiservice --all --timeout=300s
 
       - name: AWS Load Balancer Controller (helm, Pod Identity)
@@ -153,20 +152,14 @@ jobs:
           vpc_id="$(aws eks describe-cluster --name "${CLUSTER_NAME}" --query 'cluster.resourcesVpcConfig.vpcId' --output text)"
           helm repo add eks https://aws.github.io/eks-charts
           helm repo update eks
-          # createIngressClassResource=false: o IngressClassParams (CRD ainda inexistente) quebra a validacao do helm
-          # ("server is currently unable to handle the request"); o lab usa so Service/NLB, sem Ingress. Visto na janela 3.
-          for attempt in 1 2 3; do
-            if helm upgrade --install aws-load-balancer-controller eks/aws-load-balancer-controller \
-              --namespace kube-system --version "${LBC_CHART_VERSION}" \
-              --set clusterName="${CLUSTER_NAME}" --set region="${AWS_REGION}" --set vpcId="${vpc_id}" \
-              --set serviceAccount.create=true --set serviceAccount.name=aws-load-balancer-controller \
-              --set replicaCount=1 --set createIngressClassResource=false --wait --timeout 10m; then
-              break
-            fi
-            [ "${attempt}" -lt 3 ] || exit 1
-            echo "helm falhou (tentativa ${attempt}); aguardando a API do cluster"
-            sleep 30
-          done
+          # createIngressClassResource=false: o chart entrega o IngressClassParams dentro de um `kind: List`, e qualquer
+          # List falha na validacao contra o servidor 1.36 ("server is currently unable to handle the request"; reproduzido
+          # com um List so de ConfigMap, kubectl 1.35 e helm 4.1, janela 3). O lab usa so Service/NLB, sem Ingress.
+          helm upgrade --install aws-load-balancer-controller eks/aws-load-balancer-controller \
+            --namespace kube-system --version "${LBC_CHART_VERSION}" \
+            --set clusterName="${CLUSTER_NAME}" --set region="${AWS_REGION}" --set vpcId="${vpc_id}" \
+            --set serviceAccount.create=true --set serviceAccount.name=aws-load-balancer-controller \
+            --set replicaCount=1 --set createIngressClassResource=false --wait --timeout 10m
 
       - name: Argo CD (componentes core)
         if: ${{ env.ACTION == 'up' }}
