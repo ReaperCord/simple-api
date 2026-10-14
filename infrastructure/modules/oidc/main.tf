@@ -897,9 +897,9 @@ data "aws_iam_policy_document" "eks_lab_iam" {
   # O EKS confere se a role de servico do node group existe antes de criar o node group
   # (erro real da janela 3: "missing permissions for 'iam:GetRole'" em AWSServiceRoleForAmazonEKSNodegroup).
   statement {
-    sid       = "IamReadServiceLinkedRolesEks"
-    effect    = "Allow"
-    actions   = ["iam:GetRole"] # so leitura, so roles de servico
+    sid     = "IamReadServiceLinkedRolesEks"
+    effect  = "Allow"
+    actions = ["iam:GetRole"] # so leitura, so roles de servico
     resources = [
       "arn:${local.partition}:iam::${local.account_id}:role/aws-service-role/*",
       # Role ainda inexistente: o IAM avalia o GetRole pelo ARN SEM o path (confirmado no simulador e no 2o erro da janela 3).
