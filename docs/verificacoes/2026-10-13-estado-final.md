@@ -40,7 +40,7 @@ Escopo: `README.md` (Pendências), `docs/performance/benchmark-aws.md`, `docs/au
 | 25 | Latência medida dentro da task (p50 0,96 ms etc.) e contagem de 34.973 em `…-aws-apigw-backend.txt` | ⚠️ | O log group foi destruído; o arquivo guarda o resultado da consulta. A diferença de contagem para as ~37.350 enviadas **não foi reconciliada** (já declarado no arquivo) |
 | 26 | Testes da app (48: 44 passam, 4 ignorados) e jobs do PR #1 | ⚠️ | Herdados do README antigo, não reexecutados. Rodar `npm test` em `application/` com Node 24 |
 | 27 | Custo real da janela e se o Cloud Map cobra `DiscoverInstances` por requisição | ⚠️ | Cost Explorer, a partir de 14/10/2026 |
-| 28 | `tools/residual-check.sh` com exit 0 | ⚠️ | **Não foi obtido: exit 1.** As 19 varreduras diretas deram "nada encontrado"; só a seção por tag listou 12 itens já removidos ou `INACTIVE` (índice de tags atrasado). Reexecutar mais tarde |
+| 28 | `tools/residual-check.sh` com exit 0 | ⚠️ | **Não foi obtido: exit 1.** As 19 varreduras diretas deram "nada encontrado"; só a seção por tag listou 12 itens já removidos ou `INACTIVE` (índice de tags atrasado). Reexecutar mais tarde | **Atualização de 14/10/2026:** o índice de tags limpou as regras de SG e o service; para o cluster `INACTIVE` e as task definitions o script foi ajustado para classificar o ECS pelo status real (`tools/test-residual-check.sh`, 12 casos, teste de mutação) e a execução contra a AWS real saiu com **exit 0** (o exit 1 da noite do destroy fica registrado acima).
 
 ## Violações e desvios
 

@@ -55,11 +55,69 @@ check_soft() {
 }
 
 # Recursos do root bootstrap (bucket de state, OIDC, roles do pipeline, budget, ECR) levam Track=bootstrap e são esperados.
+# A consulta GERAL por tag não lista ECS cluster, service e task definition: a AWS nunca remove esses artefatos (cluster e
+# service apagados ficam INACTIVE e visíveis; task definition desregistrada fica INACTIVE para sempre; as ACTIVE vêm de
+# skip_destroy = true). Eles NÃO são ignorados: a seção seguinte classifica cada ARN de ECS achado por tag pelo STATUS REAL
+# (describe-clusters / describe-services). Cluster ou service ativo, ou que não dá para classificar, é resíduo (exit 1);
+# INACTIVE ou já inexistente é ignorado. Task definition ACTIVE só é informada (não cobra; não altera o código de saída).
+# O índice de tags é eventualmente consistente: itens de outros tipos (ex.: regras de security group) podem aparecer por
+# algumas horas depois do destroy; confirme no serviço de origem.
 # shellcheck disable=SC2016  # crases são literal JMESPath, não expansão do shell
 check "Recursos com tag Project=${PROJECT} (exceto Track=bootstrap)" \
   aws resourcegroupstaggingapi get-resources --region "$REGION" \
     --tag-filters "Key=Project,Values=${PROJECT}" \
-    --query 'ResourceTagMappingList[?length(Tags[?Key==`Track` && Value==`bootstrap`]) == `0`].ResourceARN' --output text
+    --query 'ResourceTagMappingList[?length(Tags[?Key==`Track` && Value==`bootstrap`]) == `0` && !(starts_with(ResourceARN, `arn:aws:ecs:`) && (contains(ResourceARN, `:task-definition/`) || contains(ResourceARN, `:cluster/`) || contains(ResourceARN, `:service/`)))].ResourceARN' --output text
+# ARNs de ECS (cluster, service, task definition) com tag Project, exceto bootstrap.
+ecs_tagged_arns() {
+  aws resourcegroupstaggingapi get-resources --region "$REGION"     --tag-filters "Key=Project,Values=${PROJECT}"     --resource-type-filters ecs:cluster ecs:service ecs:task-definition     --query 'ResourceTagMappingList[?length(Tags[?Key==`Track` && Value==`bootstrap`]) == `0`].ResourceARN' --output text
+}
+
+# Resíduo = cluster/service ECS marcado por tag cujo status real NÃO é INACTIVE (ou que não dá para classificar).
+# Imprime uma linha por resíduo; código != 0 = erro de consulta.
+ecs_tagged_active() {
+  local arns arn st path cluster svc
+  arns=$(ecs_tagged_arns) || { echo "$arns"; return 1; }
+  for arn in $arns; do
+    case "$arn" in
+      None|"") ;;
+      *:cluster/*)
+        st=$(aws ecs describe-clusters --region "$REGION" --clusters "$arn" --query 'clusters[0].status' --output text 2>&1)           || { echo "$st"; return 1; }
+        case "$st" in INACTIVE|None|"") ;; *) echo "$arn (cluster ECS, status $st)" ;; esac ;;
+      *:service/*)
+        path="${arn#*:service/}"
+        if [[ "$path" != */* ]]; then echo "$arn (service ECS em formato antigo, sem cluster no ARN: não classificável)"; continue; fi
+        cluster="${path%%/*}"; svc="${path#*/}"
+        st=$(aws ecs describe-services --region "$REGION" --cluster "$cluster" --services "$svc" --query 'services[0].status' --output text 2>&1)           || { echo "$st"; return 1; }
+        case "$st" in INACTIVE|None|"") ;; *) echo "$arn (service ECS, status $st)" ;; esac ;;
+      *) ;;
+    esac
+  done
+}
+
+# Task definitions ACTIVE marcadas por tag (informativo).
+ecs_taskdefs_active() {
+  local arns arn st
+  arns=$(ecs_tagged_arns) || { echo "$arns"; return 1; }
+  for arn in $arns; do
+    case "$arn" in
+      *:task-definition/*)
+        st=$(aws ecs describe-task-definition --region "$REGION" --task-definition "$arn" --query 'taskDefinition.status' --output text 2>&1)           || { echo "$st"; return 1; }
+        [ "$st" = "ACTIVE" ] && echo "$arn" ;;
+    esac
+  done
+  return 0
+}
+
+check "ECS marcado por tag e ainda ativo (cluster ou service com status diferente de INACTIVE)" ecs_tagged_active
+
+printf '
+== Task definitions ECS ACTIVE com tag Project=%s (informativo: não cobram; skip_destroy mantém a revisão; não altera o código de saída) ==
+' "$PROJECT"
+td_out=$(ecs_taskdefs_active); td_rc=$?
+if [ $td_rc -ne 0 ]; then echo "ERRO na consulta (rc=$td_rc): $td_out"; ERRORS=1
+elif [ -n "$td_out" ]; then echo "$td_out"
+else echo "ok: nenhuma"; fi
+
 check "Instâncias EC2 (nós do EKS, gerador de carga)" \
   aws ec2 describe-instances --region "$REGION" --filters Name=instance-state-name,Values=pending,running,stopping,stopped \
     --query 'Reservations[].Instances[].[InstanceId,InstanceType,State.Name]' --output text
