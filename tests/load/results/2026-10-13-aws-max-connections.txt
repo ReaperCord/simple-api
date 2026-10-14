@@ -1,0 +1,7 @@
+Evidencia transcrita da saida de comando (task efemera ECS reutilizando a task definition simple-api-dev:2, comando trocado por consultas via modulos da app; task f29085fd3dfa49e1a940d4e42a5cbf5f, exit 0), 13/10/2026 ~20:45 UTC, RDS db.t4g.micro simple-api-dev-db:
+
+RESULT SHOW max_connections {"max_connections":"79"}
+RESULT SHOW server_version {"server_version":"16.13"}
+RESULT SELECT count(*)::int AS conexoes_ativas FROM pg_stat_activity {"conexoes_ativas":9}
+
+Observacao: a instancia foi destruida ao fim da janela; esta saida nao pode ser reproduzida agora (verificar de novo no proximo apply).
