@@ -1,0 +1,26 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: simple-api
+spec:
+  template:
+    spec:
+      containers:
+        - name: simple-api
+          imagePullPolicy: IfNotPresent # a imagem e carregada no kind com `kind load`
+          env:
+            - name: DB_HOST
+              value: postgres.db-local.svc.cluster.local
+            - name: DB_PORT
+              value: "5432"
+            - name: DB_DATABASE
+              value: appdb
+            - name: DB_USER
+              value: appuser
+            - name: DB_SSLMODE
+              value: disable # so local: o Postgres do lab nao tem TLS
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: db-local
+                  key: password

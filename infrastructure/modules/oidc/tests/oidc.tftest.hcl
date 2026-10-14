@@ -71,18 +71,22 @@ run "sub_exatos_e_sem_gha_eks_lab" {
         "repo:test-owner/simple-api:environment:infra",
         "repo:test-owner@1111/simple-api@2222:environment:infra",
       ]
+      "gha-eks-lab" = [
+        "repo:test-owner/simple-api:environment:eks-lab",
+        "repo:test-owner@1111/simple-api@2222:environment:eks-lab",
+      ]
     }
-    error_message = "Cada role deve aceitar exatamente o sub por nome e o sub imutavel de pull_request, environment:deploy e environment:infra."
+    error_message = "Cada role deve aceitar exatamente o sub por nome e o sub imutavel do seu contexto (pull_request, environment:deploy, environment:infra, environment:eks-lab)."
   }
 
   assert {
-    condition     = toset(output.role_names) == toset(["gha-plan", "gha-deploy", "gha-infra"])
-    error_message = "Devem existir somente gha-plan, gha-deploy e gha-infra."
+    condition     = toset(output.role_names) == toset(["gha-plan", "gha-deploy", "gha-infra", "gha-eks-lab"])
+    error_message = "Devem existir somente gha-plan, gha-deploy, gha-infra e gha-eks-lab."
   }
 
   assert {
-    condition     = length([for n in output.role_names : n if can(regex("eks", n))]) == 0
-    error_message = "Nao pode existir role gha-eks-lab neste modulo."
+    condition     = [for n in output.role_names : n if can(regex("eks", n))] == ["gha-eks-lab"]
+    error_message = "So a role gha-eks-lab pode ter eks no nome."
   }
 
   assert {
@@ -129,6 +133,16 @@ run "trust_policy_com_aud_e_sub_exatos" {
   assert {
     condition     = jsondecode(output.trust_policies["gha-infra"]).Statement[0].Condition.StringLike["token.actions.githubusercontent.com:sub"] == ["repo:test-owner/simple-api:environment:infra", "repo:test-owner@1111/simple-api@2222:environment:infra"]
     error_message = "gha-infra deve aceitar so o sub environment:infra (por nome e imutavel)."
+  }
+
+  assert {
+    condition     = jsondecode(output.trust_policies["gha-eks-lab"]).Statement[0].Condition.StringLike["token.actions.githubusercontent.com:sub"] == ["repo:test-owner/simple-api:environment:eks-lab", "repo:test-owner@1111/simple-api@2222:environment:eks-lab"]
+    error_message = "gha-eks-lab deve aceitar so o sub environment:eks-lab (por nome e imutavel)."
+  }
+
+  assert {
+    condition     = length(distinct(flatten([for role, subs in output.role_subjects : subs]))) == 8
+    error_message = "Nenhum sub pode ser compartilhado entre roles: sao 4 roles x 2 formatos = 8 sub distintos."
   }
 }
 

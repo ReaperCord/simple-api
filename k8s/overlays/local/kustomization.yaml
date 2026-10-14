@@ -1,0 +1,13 @@
+# Overlay LOCAL (kind): app + um Postgres 16 num namespace a parte. Custo zero.
+# O Secret `db-local` NAO esta no Git: tools/k8s-local-test.sh o cria com uma senha aleatoria.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+  - postgres.yaml
+images:
+  - name: simple-api
+    newName: simple-api
+    newTag: local
+patches:
+  - path: app-env-patch.yaml

@@ -1,0 +1,288 @@
+# Laboratorio EKS efemero (06-cicd.md, 07-eks-lab.md): `up` e `down` manuais e um agendamento horario que DESTROI o lab
+# vencido (TTL de 6 h, gravado na tag TTL do cluster). Role gha-eks-lab por OIDC; environment "eks-lab" SEM aprovacao
+# de proposito: o destroy agendado precisa rodar sozinho. Pre-requisito: a stack principal no ar (VPC, RDS, API Gateway)
+# e a imagem ja publicada no ECR (deploy.yml). Custo ~US$ 0,17/h (plano de controle) mais nos, NLB e a stack principal.
+name: eks-lab
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "up (sobe o lab) ou down (destroi)"
+        type: choice
+        options:
+          - up
+          - down
+        default: up
+      image_tag:
+        description: "Tag da imagem ja publicada no ECR (SHA do commit; nunca latest); so para up"
+        type: string
+        required: false
+  schedule:
+    - cron: "17 * * * *" # a cada hora: destroi o lab se o TTL venceu
+
+permissions:
+  contents: read
+  id-token: write # assume gha-eks-lab; este workflow tem um unico job
+
+concurrency:
+  group: eks-lab
+  cancel-in-progress: false
+
+env:
+  TF_IN_AUTOMATION: "true"
+  TERRAFORM_VERSION: "1.16.5"
+  CLUSTER_NAME: simple-api-dev-eks
+  LBC_CHART_VERSION: "3.6.0" # helm chart eks/aws-load-balancer-controller (app v3.6.0)
+  ARGOCD_VERSION: "v3.5.5" # manifestos core-install (so os componentes core, sem UI nem dex)
+  LAB_TTL_HOURS: "6"
+
+jobs:
+  lab:
+    runs-on: ubuntu-24.04
+    environment: eks-lab
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: infrastructure/eks-lab
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Decidir a acao e validar entradas
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT_ACTION: ${{ inputs.action }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          set -euo pipefail
+          if [[ "${EVENT}" == "schedule" ]]; then
+            echo "ACTION=gc" >> "${GITHUB_ENV}"
+          else
+            echo "ACTION=${INPUT_ACTION}" >> "${GITHUB_ENV}"
+            if [[ "${INPUT_ACTION}" == "up" ]]; then
+              if [[ ! "${IMAGE_TAG}" =~ ^[A-Za-z0-9_.-]{1,128}$ || "${IMAGE_TAG}" == "latest" ]]; then
+                echo "::error::image_tag invalida (use a tag SHA publicada pelo deploy.yml, nunca latest)."
+                exit 1
+              fi
+            fi
+          fi
+
+      - name: Credenciais AWS via OIDC (gha-eks-lab)
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ secrets.AWS_EKS_LAB_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          # A action NAO mascara o account id por padrao; os logs deste repo sao publicos.
+          mask-aws-account-id: true
+
+      # Agendamento: so continua se existir um cluster do lab com o TTL vencido.
+      - name: Verificar o TTL do lab (gc)
+        id: ttl
+        if: ${{ env.ACTION == 'gc' }}
+        run: |
+          set -euo pipefail
+          ttl="$(aws eks describe-cluster --name "${CLUSTER_NAME}" --query 'cluster.tags.TTL' --output text 2>/dev/null || true)"
+          if [[ -z "${ttl}" || "${ttl}" == "None" ]]; then
+            echo "Nenhum lab no ar."
+            echo "expired=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          if [[ $(date -u +%s) -gt $(date -u -d "${ttl}" +%s) ]]; then
+            echo "::warning::TTL ${ttl} vencido: destruindo o lab."
+            echo "expired=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "Lab no ar, TTL ${ttl} ainda nao venceu."
+            echo "expired=false" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Terraform
+        if: ${{ env.ACTION == 'up' || env.ACTION == 'down' || steps.ttl.outputs.expired == 'true' }}
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      # O state do lab fica na key da stack principal com /eks-lab/ no meio (a role gha-eks-lab so alcanca essa key).
+      - name: terraform init (backend S3, state proprio do lab)
+        if: ${{ env.ACTION == 'up' || env.ACTION == 'down' || steps.ttl.outputs.expired == 'true' }}
+        env:
+          TF_STATE_BUCKET: ${{ secrets.TF_STATE_BUCKET }}
+          TF_STATE_KEY: ${{ secrets.TF_STATE_KEY }}
+          STATE_REGION: ${{ vars.AWS_REGION }}
+        run: |
+          set -euo pipefail
+          lab_key="${TF_STATE_KEY%terraform.tfstate}eks-lab/terraform.tfstate"
+          terraform init -input=false \
+            -backend-config="bucket=${TF_STATE_BUCKET}" \
+            -backend-config="key=${lab_key}" \
+            -backend-config="region=${STATE_REGION}"
+
+      # ------------------------------------------------------------------ UP
+      - name: terraform apply, etapa 1 (cluster, nos, add-ons, Pod Identity, regras do lab)
+        if: ${{ env.ACTION == 'up' }}
+        env:
+          TF_STATE_BUCKET: ${{ secrets.TF_STATE_BUCKET }}
+          TF_STATE_KEY: ${{ secrets.TF_STATE_KEY }}
+          ADMIN_ARNS: ${{ secrets.EKS_LAB_ADMIN_ARNS }}
+        run: |
+          set -euo pipefail
+          ttl="$(date -u -d "+${LAB_TTL_HOURS} hours" +%Y-%m-%dT%H:%M:%SZ)"
+          echo "LAB_TTL=${ttl}" >> "${GITHUB_ENV}"
+          args=(-input=false -auto-approve -var "state_bucket=${TF_STATE_BUCKET}" -var "state_key=${TF_STATE_KEY}" -var "ttl=${ttl}" -var "region=${AWS_REGION}")
+          if [[ -n "${ADMIN_ARNS:-}" ]]; then args+=(-var "admin_principal_arns=${ADMIN_ARNS}"); fi
+          terraform apply "${args[@]}"
+
+      - name: kubeconfig e espera dos nos
+        if: ${{ env.ACTION == 'up' }}
+        run: |
+          set -euo pipefail
+          aws eks update-kubeconfig --name "${CLUSTER_NAME}"
+          kubectl wait --for=condition=Ready node --all --timeout=600s
+          kubectl get nodes
+
+      - name: AWS Load Balancer Controller (helm, Pod Identity)
+        if: ${{ env.ACTION == 'up' }}
+        run: |
+          set -euo pipefail
+          vpc_id="$(aws eks describe-cluster --name "${CLUSTER_NAME}" --query 'cluster.resourcesVpcConfig.vpcId' --output text)"
+          helm repo add eks https://aws.github.io/eks-charts
+          helm repo update eks
+          helm upgrade --install aws-load-balancer-controller eks/aws-load-balancer-controller \
+            --namespace kube-system --version "${LBC_CHART_VERSION}" \
+            --set clusterName="${CLUSTER_NAME}" --set region="${AWS_REGION}" --set vpcId="${vpc_id}" \
+            --set serviceAccount.create=true --set serviceAccount.name=aws-load-balancer-controller \
+            --set replicaCount=1 --wait --timeout 10m
+
+      - name: Argo CD (componentes core)
+        if: ${{ env.ACTION == 'up' }}
+        run: |
+          set -euo pipefail
+          kubectl create namespace argocd --dry-run=client -o yaml | kubectl apply -f -
+          kubectl apply --server-side --force-conflicts -n argocd \
+            -f "https://raw.githubusercontent.com/argoproj/argo-cd/${ARGOCD_VERSION}/manifests/core-install.yaml"
+          kubectl -n argocd rollout status deployment/argocd-repo-server --timeout=300s
+          kubectl -n argocd rollout status statefulset/argocd-application-controller --timeout=300s
+
+      # O repositorio e publico e nao pode ter account id: o registro e a tag entram aqui, em runtime, e o banco entra
+      # por um ConfigMap criado a partir dos outputs do Terraform (nada disso vai para o Git).
+      - name: ConfigMap do banco e Application do Argo CD
+        if: ${{ env.ACTION == 'up' }}
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          set -euo pipefail
+          account="$(aws sts get-caller-identity --query Account --output text)"
+          image="${account}.dkr.ecr.${AWS_REGION}.amazonaws.com/simple-api:${IMAGE_TAG}"
+          kubectl create namespace simple-api --dry-run=client -o yaml | kubectl apply -f -
+          kubectl -n simple-api create configmap simple-api-db \
+            --from-literal=DB_HOST="$(terraform output -raw db_host)" \
+            --from-literal=DB_PORT="$(terraform output -raw db_port)" \
+            --from-literal=DB_DATABASE="$(terraform output -raw db_name)" \
+            --from-literal=DB_USER="$(terraform output -raw db_app_username)" \
+            --dry-run=client -o yaml | kubectl apply -f -
+          cat <<EOF | kubectl apply -f -
+          apiVersion: argoproj.io/v1alpha1
+          kind: Application
+          metadata:
+            name: simple-api
+            namespace: argocd
+            finalizers:
+              - resources-finalizer.argocd.argoproj.io
+          spec:
+            project: default
+            source:
+              repoURL: https://github.com/${GITHUB_REPOSITORY}.git
+              targetRevision: main
+              path: k8s/overlays/eks
+              kustomize:
+                images:
+                  - simple-api=${image}
+            destination:
+              server: https://kubernetes.default.svc
+              namespace: simple-api
+            syncPolicy:
+              automated:
+                prune: true
+                selfHeal: true
+              syncOptions:
+                - CreateNamespace=true
+          EOF
+
+      - name: Esperar a app sincronizar, ficar saudavel e o NLB existir
+        if: ${{ env.ACTION == 'up' }}
+        run: |
+          set -euo pipefail
+          kubectl -n argocd wait --for=jsonpath='{.status.sync.status}'=Synced application/simple-api --timeout=600s
+          kubectl -n argocd wait --for=jsonpath='{.status.health.status}'=Healthy application/simple-api --timeout=900s
+          for _ in $(seq 1 60); do
+            host="$(kubectl -n simple-api get service simple-api -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || true)"
+            [[ -n "${host}" ]] && break
+            sleep 10
+          done
+          [[ -n "${host:-}" ]] || { echo "::error::o NLB nao apareceu no Service."; exit 1; }
+          echo "NLB interno criado."
+
+      - name: terraform apply, etapa 2 (rotas ANY /eks no API Gateway)
+        if: ${{ env.ACTION == 'up' }}
+        env:
+          TF_STATE_BUCKET: ${{ secrets.TF_STATE_BUCKET }}
+          TF_STATE_KEY: ${{ secrets.TF_STATE_KEY }}
+          ADMIN_ARNS: ${{ secrets.EKS_LAB_ADMIN_ARNS }}
+        run: |
+          set -euo pipefail
+          args=(-input=false -auto-approve -var "state_bucket=${TF_STATE_BUCKET}" -var "state_key=${TF_STATE_KEY}" -var "ttl=${LAB_TTL}" -var "region=${AWS_REGION}" -var "enable_api_route=true")
+          if [[ -n "${ADMIN_ARNS:-}" ]]; then args+=(-var "admin_principal_arns=${ADMIN_ARNS}"); fi
+          terraform apply "${args[@]}"
+
+      # O formato do overwrite:path nao tem exemplo na doc para integracao privada: este smoke e o teste.
+      - name: Smoke pelo API Gateway (GET /eks/health e /eks/connect = 200)
+        if: ${{ env.ACTION == 'up' }}
+        env:
+          API_URL: ${{ vars.API_URL }}
+        run: |
+          set -euo pipefail
+          [[ -n "${API_URL}" ]] || { echo "::error::vars.API_URL nao definida."; exit 1; }
+          for path in /eks/health /eks/connect; do
+            code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 --retry 8 --retry-delay 10 --retry-all-errors "${API_URL%/}${path}" || true)"
+            echo "GET ${path} -> ${code}"
+            [[ "${code}" == "200" ]] || { echo "::error::GET ${path} devolveu ${code}."; exit 1; }
+          done
+          {
+            echo "Lab no ar. TTL: ${LAB_TTL}. Destroi sozinho depois do TTL (agendamento horario) ou com a acao down."
+            echo "Rode tools/residual-check.sh depois do destroy."
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      # ------------------------------------------------------------------ DOWN / GC
+      # Antes do destroy do Terraform: apagar o Service (o controller remove o NLB) e desinstalar o controller; senao o NLB
+      # e o SG dele ficam orfaos e impedem o destroy da VPC.
+      - name: Esvaziar o cluster (Application, Service/NLB e controller)
+        if: ${{ env.ACTION == 'down' || steps.ttl.outputs.expired == 'true' }}
+        run: |
+          set -uo pipefail
+          if ! aws eks describe-cluster --name "${CLUSTER_NAME}" >/dev/null 2>&1; then
+            echo "Cluster inexistente: nada a esvaziar."
+            exit 0
+          fi
+          aws eks update-kubeconfig --name "${CLUSTER_NAME}"
+          kubectl -n argocd delete application simple-api --ignore-not-found --wait --timeout=300s || true
+          kubectl -n simple-api delete service simple-api --ignore-not-found --wait --timeout=300s || true
+          for _ in $(seq 1 30); do
+            n="$(aws elbv2 describe-load-balancers --query "length(LoadBalancers[?starts_with(LoadBalancerName, 'k8s-')])" --output text 2>/dev/null || echo 0)"
+            [[ "${n}" == "0" ]] && break
+            echo "aguardando o NLB ser removido (${n})..."; sleep 10
+          done
+          helm uninstall aws-load-balancer-controller -n kube-system --ignore-not-found --wait || true
+
+      - name: terraform destroy
+        if: ${{ env.ACTION == 'down' || steps.ttl.outputs.expired == 'true' }}
+        env:
+          TF_STATE_BUCKET: ${{ secrets.TF_STATE_BUCKET }}
+          TF_STATE_KEY: ${{ secrets.TF_STATE_KEY }}
+        run: |
+          set -euo pipefail
+          terraform destroy -input=false -auto-approve -var "state_bucket=${TF_STATE_BUCKET}" -var "state_key=${TF_STATE_KEY}" \
+            -var "ttl=$(date -u +%Y-%m-%dT%H:%M:%SZ)" -var "region=${AWS_REGION}"
+          echo "Destroy do lab concluido. Rode tools/residual-check.sh (somente leitura) para listar residuos." >> "${GITHUB_STEP_SUMMARY}"

@@ -1,0 +1,80 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: simple-api
+  labels:
+    app.kubernetes.io/name: simple-api
+spec:
+  # Sem `replicas`: quem controla e o HPA (min 1, max 3).
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: simple-api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0 # nunca derruba um pod antes de o novo ficar pronto
+      maxSurge: 1 # o surge entra na conta de conexoes do banco (DB_POOL_MAX x pods)
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: simple-api
+    spec:
+      serviceAccountName: simple-api
+      # preStop (8 s) + encerramento da app (SHUTDOWN_TIMEOUT_MS ate 8 s) cabem com folga aqui.
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000 # usuario "node" da imagem (uid 1000)
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: simple-api
+          image: simple-api # a tag e o registro entram pelo overlay (nenhum account id no Git)
+          ports:
+            - name: http
+              containerPort: 3000
+          env:
+            - name: API_PORT
+              value: "3000"
+            - name: DB_POOL_MAX
+              value: "3" # regra de conexoes do projeto (01-arquitetura-e-restricoes.md)
+            - name: LOG_LEVEL
+              value: info
+          resources:
+            # requests = limits de CPU (paridade com a task Fargate de 0,5 vCPU).
+            requests:
+              cpu: 500m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          # /health responde 200 sem consultar o banco (liveness e readiness); nunca /connect.
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              # O pod que sai recebe SIGTERM e para de aceitar conexoes, mas o kube-proxy (e o NLB, no EKS) ainda levam
+              # alguns segundos para tira-lo dos enderecos. Sem esta espera o rolling update perde requisicoes
+              # (medido no kind: 1 falha em 358). O sleep do busybox existe na imagem alpine.
+              exec:
+                command: ["sleep", "8"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]

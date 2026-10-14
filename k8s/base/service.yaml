@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: simple-api
+  labels:
+    app.kubernetes.io/name: simple-api
+spec:
+  # ClusterIP na base; o overlay eks troca por LoadBalancer (NLB interno via AWS Load Balancer Controller).
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: simple-api
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

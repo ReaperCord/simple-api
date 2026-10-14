@@ -155,7 +155,7 @@ jobs:
       - name: terraform init (-backend=false) e validate por root e modulo
         run: |
           set -euo pipefail
-          for d in infrastructure infrastructure/bootstrap; do
+          for d in infrastructure infrastructure/bootstrap infrastructure/eks-lab; do
             echo "::group::validate ${d}"
             terraform -chdir="${d}" init -backend=false -input=false -lockfile=readonly
             terraform -chdir="${d}" validate
@@ -169,14 +169,14 @@ jobs:
             echo "::endgroup::"
           done < <(find infrastructure/modules -name '*.tf' -not -path '*/.terraform/*' -not -path '*/tests/*' -printf '%h\n' | sort -u)
 
-      - name: terraform test (modulos com .tftest.hcl)
+      - name: terraform test (modulos e root eks-lab com .tftest.hcl)
         run: |
           set -euo pipefail
           while IFS= read -r d; do
             echo "::group::test ${d}"
             terraform -chdir="${d}" test
             echo "::endgroup::"
-          done < <(find infrastructure/modules -name '*.tftest.hcl' -not -path '*/.terraform/*' -print0 | xargs -0 -n1 dirname | sed -E 's#/tests$##' | sort -u)
+          done < <(find infrastructure/modules infrastructure/eks-lab -name '*.tftest.hcl' -not -path '*/.terraform/*' -print0 | xargs -0 -n1 dirname | sed -E 's#/tests$##' | sort -u)
 
       # Prova de que nat-gateway, aws_lb* e private.json ficam fora da composicao do root.
       - name: Composicao do root sem nat-gateway, aws_lb* e private.json

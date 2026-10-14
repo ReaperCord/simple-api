@@ -1,0 +1,25 @@
+Resultado de tools/k8s-local-test.sh (kind, Kubernetes v1.35.0, metrics-server v0.9.0), 14/10/2026. Local; nao e capacidade da AWS.
+== 1) cluster kind e imagem
+OK    cluster simple-api-local (Kubernetes v1.35.0) e imagem simple-api:local carregada
+== 2) metrics-server v0.9.0 (patch --kubelet-insecure-tls so no kind)
+OK    metrics-server pronto
+== 3) namespaces, segredo local (aleatorio, fora do Git) e overlay local
+OK    Deployment simple-api pronto (1 replica, readiness /health)
+== 4) contrato HTTP (de dentro do cluster)
+OK    GET / = 200
+OK    GET /health = 200
+OK    GET /connect = 200
+OK    GET / devolve "API OK!"
+== 5) seguranca em runtime
+OK    processo roda como uid 1000 (nao-root)
+OK    sistema de arquivos raiz somente leitura
+OK    Pod Security restricted barra um pod privilegiado no namespace da app
+== 6) HPA e PDB
+OK    HPA existe (min 1, max 3, CPU 60%)
+OK    PDB existe (minAvailable 1)
+OK    HPA le a CPU pelo metrics-server (uso atual 0%)
+== 7) rolling update sem nenhuma requisicao falhada (maxUnavailable 0 + readiness + preStop), 3 restarts seguidos
+OK    3 rolling restarts com 693 requisicoes e 0 falhas
+== 8) HPA escala sob carga (carga em /connect por pods temporarios)
+OK    HPA escalou para 2 replicas (CPU de pico 85%)
+RESULTADO: 15 ok, 0 falha(s)

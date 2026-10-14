@@ -1,0 +1,23 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: simple-api
+spec:
+  template:
+    spec:
+      containers:
+        - name: simple-api
+          # DB_HOST, DB_PORT, DB_DATABASE e DB_USER vem do ConfigMap `simple-api-db` (criado pelo workflow).
+          envFrom:
+            - configMapRef:
+                name: simple-api-db
+                optional: false
+          env:
+            # Autenticacao IAM do RDS (ADR 0013): o usuario do banco so tem CONNECT; as credenciais AWS do pod vem do
+            # Pod Identity (nenhum segredo). verify-full e obrigatorio no modo IAM.
+            - name: DB_AUTH_MODE
+              value: iam
+            - name: DB_SSLMODE
+              value: verify-full
+            - name: AWS_REGION
+              value: us-east-1

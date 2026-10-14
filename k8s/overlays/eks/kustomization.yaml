@@ -1,0 +1,14 @@
+# Overlay EKS (laboratorio efemero). Aplicado pelo Argo CD (core) observando k8s/overlays/eks na main.
+#
+# O que NAO esta aqui, de proposito (o repositorio e publico e nao pode ter account id):
+#  - o registro e a tag da imagem: o Application do Argo CD, criado pelo workflow eks-lab.yml, define
+#    `kustomize.images: simple-api=<registro ECR>/simple-api:<tag>` (a tag e o SHA do commit publicado pelo deploy.yml);
+#  - o endereco do banco: o ConfigMap `simple-api-db` e criado pelo workflow a partir dos outputs do Terraform.
+# Sem esse ConfigMap o pod fica em CreateContainerConfigError (e o sinal esperado de "falta configurar").
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+patches:
+  - path: app-patch.yaml
+  - path: service-nlb-patch.yaml

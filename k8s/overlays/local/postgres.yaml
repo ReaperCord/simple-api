@@ -1,0 +1,67 @@
+# Postgres 16 do laboratorio local (mesma imagem fixada por digest e mesmo SCRAM do docker-compose.yml).
+# Num namespace proprio: o namespace da app usa o Pod Security "restricted", que a imagem do Postgres nao cumpre.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: db-local
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: db-local
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
+          ports:
+            - name: pg
+              containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              value: appuser
+            - name: POSTGRES_DB
+              value: appdb
+            - name: POSTGRES_INITDB_ARGS
+              value: --auth-host=scram-sha-256 --auth-local=scram-sha-256
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: db-local
+                  key: password
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U appuser -d appdb"]
+            periodSeconds: 3
+            timeoutSeconds: 3
+            failureThreshold: 20
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: data
+          emptyDir: {} # descartavel: o lab local nao guarda dados
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: db-local
+spec:
+  selector:
+    app: postgres
+  ports:
+    - name: pg
+      port: 5432
+      targetPort: pg
