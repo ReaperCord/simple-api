@@ -12,3 +12,4 @@ resources:
 patches:
   - path: app-patch.yaml
   - path: service-nlb-patch.yaml
+  - path: namespace-readiness-gate-patch.yaml
