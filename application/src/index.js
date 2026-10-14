@@ -4,6 +4,7 @@ const { createApp } = require('./app');
 const { loadConfig, ConfigError } = require('./config');
 const { createDb } = require('./db');
 const { createIamTokenProvider } = require('./iam-auth');
+const { prewarm } = require('./prewarm');
 const { createLogger } = require('./logger');
 const { createSecretProvider, createAwsSecretFetcher } = require('./secret');
 
@@ -74,6 +75,11 @@ function main() {
   const server = app.listen(config.port, () => {
     logger.info(`API iniciada. Escutando PORT ${config.port}`);
   });
+
+  // Modo IAM: aquece o token e a primeira conexao sem bloquear a partida nem derrubar o processo (src/prewarm.js).
+  if (config.db.authMode === 'iam') {
+    prewarm({ provider: secretProvider, db, logger });
+  }
 
   let stopping = false;
   const onSignal = (signal) => {

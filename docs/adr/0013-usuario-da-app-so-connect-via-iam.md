@@ -40,7 +40,7 @@ Evidências em `tests/load/results/2026-10-14-aws-iam-auth-validacao.txt` e `…
 - **Menor privilégio comprovado:** a role da API não lê o segredo master (`implicitDeny`) e conecta só como `app_connect` nesta instância; como `app_connect`, criar tabela, schema ou role, ler `pg_authid`/`pg_shadow` e `SET ROLE` do master foram negados (`42501`).
 - **Estável:** 2 h de soak a 600 req/s com 0% de erro e sem deriva de latência.
 - **O risco de memória se confirmou, e a causa foi provada por A/B na mesma instância:** a autenticação IAM custa ~117 MiB de RAM e ~150 MiB de swap no `db.t4g.micro` (memória livre 152 a 184 MiB → 52 a 68 MiB; swap 0,5 → 134 a 201 MiB (médias de 5 min); créditos de CPU em ~0). Sem cobrança extra de créditos excedentes na janela, sem erro, mas **com a margem fina**.
-- **Dois comportamentos para saber:** (1) a primeira conexão fria pode estourar o `connectionTimeoutMillis` de 2 s (geração do token e TLS), dando um 503 pontual; (2) depois de **ligar** a autenticação IAM numa instância existente, as conexões ficam lentas por ~1 min.
+- **Dois comportamentos para saber:** (1) a primeira conexão fria pode estourar o `connectionTimeoutMillis` de 2 s (geração do token e TLS), dando um 503 pontual (mitigado pelo pré-aquecimento da partida, ainda sem medição na AWS); (2) depois de **ligar** a autenticação IAM numa instância existente, as conexões ficam lentas por ~1 min.
 - **DR:** o `DbiResourceId` muda na instância restaurada, então a policy `rds-db:connect` precisa ser atualizada (4 s por CLI; medido em [`docs/dr.md`](../dr.md)).
 
 ### Opções para a instância (decisão do Leandro)
@@ -55,4 +55,6 @@ Recomendação: **manter IAM no micro** para a entrega (mostra least privilege a
 
 ## Status
 
-Aceito. Implementado, coberto por testes (72 na app, `terraform test` do módulo `rds`, testes dos scripts) e **validado na AWS em 14/10/2026** (seção acima). Trade-off de memória medido; decisão sobre a classe da instância pendente do Leandro.
+Aceito. Implementado, coberto por testes (75 na app, `terraform test` do módulo `rds`, testes dos scripts) e **validado na AWS em 14/10/2026** (seção acima). **Decisão do Leandro em 14/10/2026: manter a autenticação IAM no `db.t4g.micro`** (a primeira opção da tabela), com o trade-off de memória documentado; subir a classe só se a carga real exigir folga.
+
+**Mitigação aplicada:** a app aquece o token e a primeira conexão do pool na partida (`application/src/prewarm.js`, só no modo IAM), sem bloquear a partida nem derrubar o processo se falhar. Isso ataca o 503 pontual da primeira conexão fria; **não foi medido na AWS** (valida no próximo apply).
