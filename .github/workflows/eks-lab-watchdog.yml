@@ -1,0 +1,49 @@
+# Vigia do TTL do laboratorio EKS. Disparado por todo `eks-lab.yml action=up` com o TTL do lab: dorme ate o TTL vencer
+# (mais 2 min de folga) e dispara `eks-lab.yml action=gc`, que destroi o lab SO se o cluster ainda estiver no ar e com o
+# TTL vencido. Se o lab ja foi destruido pelo `down`, o gc nao faz nada.
+# Por que existe: o `schedule` do GitHub nao e confiavel (medido em 14 e 15/10/2026: 3 execucoes em ~17 h de cron
+# horario). O vigia e um job com prazo conhecido; o agendamento do eks-lab.yml continua como segunda rede.
+# Sem credencial AWS: so dispara outro workflow (actions: write). Limite de 6 h por job do GitHub: por isso o TTL do lab
+# vai de 1 a 5 h e o timeout deste job e 330 min.
+name: eks-lab-watchdog
+
+on:
+  workflow_dispatch:
+    inputs:
+      ttl:
+        description: "TTL do lab em UTC (AAAA-MM-DDTHH:MM:SSZ), passado pelo eks-lab.yml"
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  actions: write # dispara o eks-lab.yml com action=gc
+
+jobs:
+  vigia:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+    steps:
+      - name: Dormir ate o TTL e disparar o gc
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TTL: ${{ inputs.ttl }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${TTL}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+            echo "::error::ttl invalido: ${TTL}"
+            exit 1
+          fi
+          alvo=$(( $(date -u -d "${TTL}" +%s) + 120 ))
+          espera=$(( alvo - $(date -u +%s) ))
+          # 320 min: cabe no timeout de 330 min com folga para o gh workflow run.
+          if (( espera > 320 * 60 )); then
+            echo "::error::TTL ${TTL} longe demais (${espera} s): o vigia nao cabe no limite do job."
+            exit 1
+          fi
+          if (( espera > 0 )); then
+            echo "Dormindo ${espera} s, ate ${TTL} + 2 min (UTC)."
+            sleep "${espera}"
+          fi
+          gh workflow run eks-lab.yml --repo "${GITHUB_REPOSITORY}" -f action=gc
+          echo "gc disparado em $(date -u +%Y-%m-%dT%H:%M:%SZ) para o TTL ${TTL}." >> "${GITHUB_STEP_SUMMARY}"
