@@ -12,5 +12,9 @@ metadata:
     service.beta.kubernetes.io/aws-load-balancer-healthcheck-protocol: http
     service.beta.kubernetes.io/aws-load-balancer-healthcheck-path: /health
     service.beta.kubernetes.io/aws-load-balancer-healthcheck-port: traffic-port
+    # Cross-zone ligado (no NLB vem desligado): sem ele, quando o pod troca de AZ, o no do NLB da AZ antiga fica sem
+    # alvo e as conexoes que chegam por ele travam. Medido na janela 3: falhas por ~100 s a cada rolling restart
+    # (alvo antigo draining em us-east-1a, novo em us-east-1b). Custo: transferencia entre AZs, US$ 0,01/GB.
+    service.beta.kubernetes.io/aws-load-balancer-attributes: load_balancing.cross_zone.enabled=true
 spec:
   type: LoadBalancer
