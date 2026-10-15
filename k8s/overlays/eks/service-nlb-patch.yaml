@@ -16,5 +16,8 @@ metadata:
     # alvo e as conexoes que chegam por ele travam. Medido na janela 3: falhas por ~100 s a cada rolling restart
     # (alvo antigo draining em us-east-1a, novo em us-east-1b). Custo: transferencia entre AZs, US$ 0,01/GB.
     service.beta.kubernetes.io/aws-load-balancer-attributes: load_balancing.cross_zone.enabled=true
+    # Taxonomia de tags da AWS (Project > Track > Component) no NLB, no target group e no SG que o controller cria:
+    # sem isso, o NLB do lab nao aparecia no filtro de custo por Project.
+    service.beta.kubernetes.io/aws-load-balancer-additional-resource-tags: Project=simple-api,Env=dev,Track=eks,Component=load-balancer,ManagedBy=aws-load-balancer-controller
 spec:
   type: LoadBalancer
