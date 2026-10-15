@@ -306,6 +306,10 @@ Estado em 14/10/2026 (fim da janela 3): a stack foi criada na AWS três vezes (1
     - a `gha-eks-lab` precisou de três permissões a mais.
   - Dados em [`tests/k8s/2026-10-14-eks-janela-3-resultado.txt`](tests/k8s/2026-10-14-eks-janela-3-resultado.txt).
   - Destroy às 22:14 de Brasília (run 38664023276, 54 destroyed). O `residual-check` saiu com exit 1 só pelo atraso do índice de tags: as 10 regras de SG listadas já estavam `NotFound`.
+- **Janela curta do lab EKS (15/10, 10:10 a ~11:50):**
+  - **Vigia do TTL validado:** o lab foi destruído sozinho pelo `gc` 2 min depois do TTL. O cron do GitHub, que deveria ser horário, rodou só 3 vezes em ~17 h, e agora é só a segunda rede.
+  - **Smoke:** o prazo passou a 6 min, porque um NLB recém-criado levou ~4 min para responder.
+  - **Falhas no rolling restart:** a causa ficou medida em 0,30%, no SIGTERM do pod antigo, por uma corrida de keep-alive. A correção está proposta no [ADR 0014](docs/adr/0014-lab-eks-com-argo-cd-core-e-nlb-interno.md) e ainda não foi implementada.
 - Carga na AWS, rotulada AWS e separada da LOCAL: pelo API Gateway (smoke e baseline a 40 req/s) e dentro da VPC (load até 500, stress até 1.000 e rampa até 1.500 req/s, sem erro; o breakpoint não foi atingido). Detalhes, ressalvas e dados em `tests/load/results/`.
 
 **Ainda não verificado**

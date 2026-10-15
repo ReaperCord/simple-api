@@ -313,15 +313,17 @@ jobs:
         run: |
           set -euo pipefail
           [[ -n "${API_URL}" ]] || { echo "::error::vars.API_URL nao definida."; exit 1; }
-          # Laco explicito: as rotas novas levam alguns segundos para o auto-deploy do stage $default (na janela 3 o
-          # primeiro GET deu 404 e minutos depois 200). `curl --retry` nao serve aqui: sem --fail, 404 nao e erro.
+          # Laco explicito: as rotas novas levam alguns segundos para o auto-deploy do stage $default (404), e um NLB
+          # recem-criado leva minutos para responder pelo VPC Link (500/503). Medido em 15/10/2026: NLB criado 10:38:21,
+          # 200 estavel so a partir de 10:42:20 (~4 min); com prazo de 120 s o smoke falhou. Prazo: 6 min.
+          # `curl --retry` nao serve aqui: sem --fail, 404 nao e erro.
           for path in /eks/health /eks/connect; do
-            deadline=$((SECONDS + 120))
+            deadline=$((SECONDS + 360))
             while :; do
               code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 "${API_URL%/}${path}" || true)"
               echo "GET ${path} -> ${code}"
               [[ "${code}" == "200" ]] && break
-              (( SECONDS < deadline )) || { echo "::error::GET ${path} devolveu ${code} por 120 s."; exit 1; }
+              (( SECONDS < deadline )) || { echo "::error::GET ${path} devolveu ${code} por 6 min."; exit 1; }
               sleep 10
             done
           done

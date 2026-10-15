@@ -1,0 +1,53 @@
+Rolling restart no EKS com trafego (15/10/2026, 10:44 a 11:01 de Brasilia). Rotulo: AWS.
+Cluster simple-api-dev-eks 1.36, 2 nos t4g.small (1a e 1b), NLB com cross-zone e readiness gate, preStop sleep 8 s.
+Trafego: 4 lacos curl independentes em /eks/health pelo API Gateway, timeout 5 s. Tempos relativos ao 'rollout restart'.
+Alvos do NLB (describe-target-health) e pods amostrados a cada ~1 s. Ferramenta: scripts restart-medir.sh e restart-analisar.py (sessao).
+
+===== medicao 1
+marcos: {'base_ok': -6.0, 'restart': 0.0, 'rollout_ok': 48.5, 'antigo_sumiu': 58.8, 'fim': 179.6}
+requisicoes=503 falhas=0
+mudancas nos alvos do NLB:
+  + -21.4s 10.100.1.158(1a):healthy
+  +  16.5s 10.100.1.158(1a):healthy, 10.100.2.88(1b):initial
+  +  47.0s 10.100.1.158(1a):draining, 10.100.2.88(1b):healthy
+===== medicao 2
+marcos: {'base_ok': -5.7, 'restart': 0.0, 'rollout_ok': 45.0, 'antigo_sumiu': 54.5, 'fim': 174.8}
+requisicoes=506 falhas=1
++  53.1s w1 http=000 timeout t=5.010268s | alvos: 10.100.1.158(1a):healthy; 10.100.2.88(1b):draining | pods: n5f5g:Running/True
+mudancas nos alvos do NLB:
+  + -20.9s 10.100.1.158(1a):draining, 10.100.2.88(1b):healthy
+  +  13.4s 10.100.1.158(1a):initial, 10.100.2.88(1b):healthy
+  +  45.5s 10.100.1.158(1a):healthy, 10.100.2.88(1b):draining
+===== medicao 3
+marcos: {'base_ok': -4.6, 'restart': 0.0, 'rollout_ok': 42.6, 'antigo_sumiu': 51.9, 'fim': 172.3}
+requisicoes=495 falhas=1
++  54.1s w4 http=503 curl 23 t=3.538872s | alvos: 10.100.1.158(1a):draining; 10.100.2.88(1b):draining; 10.100.2.34(1b):healthy | pods: q574b:Running/True
+mudancas nos alvos do NLB:
+  + -19.8s 10.100.1.158(1a):healthy, 10.100.2.88(1b):draining
+  +  13.2s 10.100.1.158(1a):healthy, 10.100.2.34(1b):initial, 10.100.2.88(1b):draining
+  +  37.9s 10.100.1.158(1a):draining, 10.100.2.34(1b):healthy, 10.100.2.88(1b):draining
+  + 148.1s 10.100.1.158(1a):draining, 10.100.2.34(1b):healthy
+===== medicao 4
+marcos: {'base_ok': -4.8, 'restart': 0.0, 'rollout_ok': 42.3, 'antigo_sumiu': 50.9, 'fim': 171.2}
+requisicoes=570 falhas=2
++  49.4s w2 http=503 curl 23 t=0.480724s | alvos: 10.100.1.158(1a):healthy; 10.100.2.34(1b):draining | pods: q574b:Running/True/apagando; lkxlv:Running/True
++  53.1s w1 http=000 timeout t=5.006867s | alvos: 10.100.1.158(1a):healthy; 10.100.2.34(1b):draining | pods: lkxlv:Running/True
+mudancas nos alvos do NLB:
+  + -20.0s 10.100.1.158(1a):draining, 10.100.2.34(1b):healthy
+  +  10.7s 10.100.1.158(1a):initial, 10.100.2.34(1b):healthy
+  +  42.0s 10.100.1.158(1a):healthy, 10.100.2.34(1b):draining
+===== medicao 5
+marcos: {'base_ok': -5.2, 'restart': 0.0, 'rollout_ok': 43.0, 'antigo_sumiu': 51.9, 'fim': 172.3}
+requisicoes=564 falhas=4
++  50.0s w3 http=503 curl 23 t=0.469177s | alvos: 10.100.1.158(1a):draining; 10.100.2.34(1b):draining; 10.100.2.241(1b):healthy | pods: dcszk:Running/True
++  54.2s w1 http=000 timeout t=5.004762s | alvos: 10.100.1.158(1a):draining; 10.100.2.34(1b):draining; 10.100.2.241(1b):healthy | pods: dcszk:Running/True
++  55.1s w2 http=000 timeout t=5.011709s | alvos: 10.100.1.158(1a):draining; 10.100.2.34(1b):draining; 10.100.2.241(1b):healthy | pods: dcszk:Running/True
++  55.5s w3 http=000 timeout t=5.014968s | alvos: 10.100.1.158(1a):draining; 10.100.2.34(1b):draining; 10.100.2.241(1b):healthy | pods: dcszk:Running/True
+mudancas nos alvos do NLB:
+  + -20.4s 10.100.1.158(1a):healthy, 10.100.2.34(1b):draining
+  +  11.5s 10.100.1.158(1a):healthy, 10.100.2.241(1b):initial, 10.100.2.34(1b):draining
+  +  40.9s 10.100.1.158(1a):draining, 10.100.2.241(1b):healthy, 10.100.2.34(1b):draining
+  + 143.0s 10.100.1.158(1a):draining, 10.100.2.241(1b):healthy
+
+SIGTERM do pod antigo (log da app, relogio do pod; o do gerador pode diferir ~1 s): m4 +50,1 s (pod sumiu +50,9 s); m5 +50,7 s (pod sumiu +51,9 s).
+Total: 8 falhas em 2.638 requisicoes (0,30%), todas na janela do SIGTERM do pod antigo.
