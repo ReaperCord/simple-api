@@ -300,7 +300,8 @@ jobs:
 
       # Usa um "aws" falso (tools/test-residual-check.sh): sem credencial e sem tocar na AWS.
       # Cobre a classificacao de ECS marcado por tag pelo status real (cluster/service ativo e residuo).
-      - name: Sintaxe e testes (residual-check e run-db-init)
+      # plan-guard: classificacao do plano que decide se o infra.yml exige confirm_destructive (planos JSON sinteticos).
+      - name: Sintaxe e testes (residual-check, run-db-init e plan-guard)
         run: |
           set -euo pipefail
           bash -n tools/residual-check.sh
@@ -309,6 +310,9 @@ jobs:
           bash -n tools/run-db-init.sh
           bash -n tools/test-run-db-init.sh
           bash tools/test-run-db-init.sh
+          bash -n tools/plan-guard.sh
+          bash -n tools/test-plan-guard.sh
+          bash tools/test-plan-guard.sh
 
   plan:
     name: plan (terraform plan com state em S3)

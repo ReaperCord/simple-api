@@ -38,6 +38,16 @@ output "gha_infra_role_arn" {
   value       = module.oidc.role_arns["gha-infra"]
 }
 
+output "gha_infra_plan_role_arn" {
+  description = "ARN da role gha-infra-plan (secret AWS_INFRA_PLAN_ROLE_ARN do environment infra-plan no GitHub)"
+  value       = module.oidc.role_arns["gha-infra-plan"]
+}
+
+output "gha_eks_lab_role_arn" {
+  description = "ARN da role gha-eks-lab (secret AWS_EKS_LAB_ROLE_ARN no GitHub)"
+  value       = module.oidc.role_arns["gha-eks-lab"]
+}
+
 output "budget_name" {
   description = "Nome do budget mensal"
   value       = module.budget.budget_name

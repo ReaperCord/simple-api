@@ -53,7 +53,7 @@ variables {
 }
 
 # Dois sub por role (lista fechada): por NOME e IMUTAVEL (repo:OWNER@OWNER-ID/REPO@REPO-ID:<ctx>),
-# conforme 03-devsecops.md e locals do modulo. So as tres roles (nao existe gha-eks-lab).
+# conforme 03-devsecops.md e locals do modulo. Cinco roles, cada uma no seu contexto.
 run "sub_exatos_e_sem_gha_eks_lab" {
   command = plan
 
@@ -71,17 +71,21 @@ run "sub_exatos_e_sem_gha_eks_lab" {
         "repo:test-owner/simple-api:environment:infra",
         "repo:test-owner@1111/simple-api@2222:environment:infra",
       ]
+      "gha-infra-plan" = [
+        "repo:test-owner/simple-api:environment:infra-plan",
+        "repo:test-owner@1111/simple-api@2222:environment:infra-plan",
+      ]
       "gha-eks-lab" = [
         "repo:test-owner/simple-api:environment:eks-lab",
         "repo:test-owner@1111/simple-api@2222:environment:eks-lab",
       ]
     }
-    error_message = "Cada role deve aceitar exatamente o sub por nome e o sub imutavel do seu contexto (pull_request, environment:deploy, environment:infra, environment:eks-lab)."
+    error_message = "Cada role deve aceitar exatamente o sub por nome e o sub imutavel do seu contexto (pull_request, environment:deploy, environment:infra, environment:infra-plan, environment:eks-lab)."
   }
 
   assert {
-    condition     = toset(output.role_names) == toset(["gha-plan", "gha-deploy", "gha-infra", "gha-eks-lab"])
-    error_message = "Devem existir somente gha-plan, gha-deploy, gha-infra e gha-eks-lab."
+    condition     = toset(output.role_names) == toset(["gha-plan", "gha-deploy", "gha-infra", "gha-infra-plan", "gha-eks-lab"])
+    error_message = "Devem existir somente gha-plan, gha-deploy, gha-infra, gha-infra-plan e gha-eks-lab."
   }
 
   assert {
@@ -141,8 +145,13 @@ run "trust_policy_com_aud_e_sub_exatos" {
   }
 
   assert {
-    condition     = length(distinct(flatten([for role, subs in output.role_subjects : subs]))) == 8
-    error_message = "Nenhum sub pode ser compartilhado entre roles: sao 4 roles x 2 formatos = 8 sub distintos."
+    condition     = jsondecode(output.trust_policies["gha-infra-plan"]).Statement[0].Condition.StringLike["token.actions.githubusercontent.com:sub"] == ["repo:test-owner/simple-api:environment:infra-plan", "repo:test-owner@1111/simple-api@2222:environment:infra-plan"]
+    error_message = "gha-infra-plan deve aceitar so o sub environment:infra-plan (por nome e imutavel), nunca pull_request."
+  }
+
+  assert {
+    condition     = length(distinct(flatten([for role, subs in output.role_subjects : subs]))) == 10
+    error_message = "Nenhum sub pode ser compartilhado entre roles: sao 5 roles x 2 formatos = 10 sub distintos."
   }
 }
 

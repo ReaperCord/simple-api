@@ -1,5 +1,11 @@
 # Plan/apply/destroy da stack principal (root infrastructure/). Somente manual.
-# Role gha-infra por OIDC; environment "infra" com aprovacao obrigatoria (e o gate de apply e destroy).
+# Dois jobs, para a aprovacao acontecer DEPOIS de o plano existir e ser lido:
+#  1. plan  (role gha-infra-plan, environment infra-plan, sem aprovacao): gera o plano, publica o resumo (contagens e
+#     a lista do que sera destruido ou substituido) e guarda o arquivo no bucket de state com o SHA-256.
+#  2. apply (role gha-infra, environment infra, COM aprovacao): so roda em apply/destroy e se houver mudanca; baixa o
+#     plano, confere o SHA-256 e aplica exatamente ele (o Terraform recusa se o state mudou depois do plan).
+# Mudanca destrutiva (algum delete ou replace) exige confirm_destructive igual ao nome do ambiente; sem isso o run
+# para no job plan, antes do gate.
 # Ordem do primeiro uso: bootstrap (local) -> deploy.yml com only_build=true -> este workflow com a tag da imagem.
 name: infra
 
@@ -18,23 +24,34 @@ on:
         description: "Tag da imagem ja publicada no ECR (SHA do commit; nunca latest)"
         type: string
         required: true
+      confirm_destructive:
+        description: "So para mudanca destrutiva (delete ou replace): digite o nome do ambiente (dev)"
+        type: string
+        default: ""
 
 permissions:
   contents: read
-  id-token: write # assume gha-infra; este workflow tem um unico job, que assume a role
+  id-token: write # cada job assume a sua role (gha-infra-plan no plan, gha-infra no apply)
 
 concurrency:
   group: infra
   cancel-in-progress: false
 
+env:
+  TF_IN_AUTOMATION: "true"
+  TERRAFORM_VERSION: "1.16.5"
+  ENVIRONMENT_NAME: dev
+
 jobs:
-  terraform:
+  plan:
     runs-on: ubuntu-24.04
-    environment: infra
-    timeout-minutes: 90
-    env:
-      TF_IN_AUTOMATION: "true"
-      TERRAFORM_VERSION: "1.16.5"
+    environment: infra-plan
+    timeout-minutes: 30
+    outputs:
+      has_changes: ${{ steps.guard.outputs.has_changes }}
+      destructive: ${{ steps.guard.outputs.destructive }}
+      plan_key: ${{ steps.save.outputs.plan_key }}
+      plan_sha256: ${{ steps.save.outputs.plan_sha256 }}
     defaults:
       run:
         working-directory: infrastructure
@@ -54,10 +71,10 @@ jobs:
             exit 1
           fi
 
-      - name: Credenciais AWS via OIDC (gha-infra)
+      - name: Credenciais AWS via OIDC (gha-infra-plan)
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
-          role-to-assume: ${{ secrets.AWS_INFRA_ROLE_ARN }}
+          role-to-assume: ${{ secrets.AWS_INFRA_PLAN_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
           # A action NAO mascara o account id por padrao; os logs deste repo sao publicos.
           mask-aws-account-id: true
@@ -85,15 +102,111 @@ jobs:
           ACTION: ${{ inputs.action }}
         run: |
           set -euo pipefail
-          if [[ "${ACTION}" == "destroy" ]]; then
-            terraform plan -destroy -input=false -var-file=environments/dev.tfvars -var "image_tag=${IMAGE_TAG}" -out=tfplan
-          else
-            terraform plan -input=false -var-file=environments/dev.tfvars -var "image_tag=${IMAGE_TAG}" -out=tfplan
-          fi
+          destroy_flag=()
+          [[ "${ACTION}" == "destroy" ]] && destroy_flag=(-destroy)
+          terraform plan "${destroy_flag[@]}" -input=false -var-file="environments/${ENVIRONMENT_NAME}.tfvars" \
+            -var "image_tag=${IMAGE_TAG}" -out=tfplan
 
-      # Sem -auto-approve: o gate e a aprovacao do environment "infra". O apply usa o arquivo salvo acima.
-      - name: terraform apply do plano salvo (apply e destroy)
-        if: ${{ inputs.action == 'apply' || inputs.action == 'destroy' }}
+      # So enderecos de recurso vao para o resumo (publico): nunca valores do plano.
+      - name: Classificar o plano (destrutivo?)
+        id: guard
+        env:
+          ACTION: ${{ inputs.action }}
+        run: |
+          set -euo pipefail
+          terraform show -json tfplan > "${RUNNER_TEMP}/plan.json"
+          bash ../tools/plan-guard.sh "${RUNNER_TEMP}/plan.json" "${RUNNER_TEMP}/resumo.md" | tee -a "${GITHUB_OUTPUT}"
+          rm -f "${RUNNER_TEMP}/plan.json"
+          {
+            echo "## Plano: ${ACTION} (${ENVIRONMENT_NAME})"
+            echo
+            cat "${RUNNER_TEMP}/resumo.md"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Exigir confirmacao em mudanca destrutiva
+        if: ${{ inputs.action != 'plan' && steps.guard.outputs.destructive == 'true' }}
+        env:
+          CONFIRM: ${{ inputs.confirm_destructive }}
+        run: |
+          set -euo pipefail
+          if [[ "${CONFIRM}" != "${ENVIRONMENT_NAME}" ]]; then
+            echo "::error::Plano destrutivo (delete ou replace; lista no resumo do run). Para seguir, rode de novo com confirm_destructive=${ENVIRONMENT_NAME}."
+            echo "**Parado antes do gate:** plano destrutivo sem confirm_destructive=${ENVIRONMENT_NAME}." >> "${GITHUB_STEP_SUMMARY}"
+            exit 1
+          fi
+          echo "Mudanca destrutiva confirmada (confirm_destructive=${CONFIRM})." >> "${GITHUB_STEP_SUMMARY}"
+
+      # O bucket de state e privado e criptografado; artifact nao serve (repo publico e o plano tem dados do ambiente).
+      - name: Guardar o plano no bucket de state
+        id: save
+        if: ${{ inputs.action != 'plan' && steps.guard.outputs.has_changes == 'true' }}
+        env:
+          TF_STATE_BUCKET: ${{ secrets.TF_STATE_BUCKET }}
+        run: |
+          set -euo pipefail
+          key="plans/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}/tfplan"
+          sha="$(sha256sum tfplan | cut -d' ' -f1)"
+          aws s3 cp tfplan "s3://${TF_STATE_BUCKET}/${key}" --only-show-errors
+          echo "plan_key=${key}" >> "${GITHUB_OUTPUT}"
+          echo "plan_sha256=${sha}" >> "${GITHUB_OUTPUT}"
+          {
+            echo
+            echo "Plano guardado (SHA-256 \`${sha}\`). **Leia a lista acima e aprove o gate \`infra\` do job apply.**"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+  apply:
+    needs: plan
+    if: ${{ inputs.action != 'plan' && needs.plan.outputs.has_changes == 'true' }}
+    runs-on: ubuntu-24.04
+    environment: infra
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: infrastructure
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Credenciais AWS via OIDC (gha-infra)
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ secrets.AWS_INFRA_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          mask-aws-account-id: true
+
+      - name: Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: terraform init (backend S3)
+        env:
+          TF_STATE_BUCKET: ${{ secrets.TF_STATE_BUCKET }}
+          TF_STATE_KEY: ${{ secrets.TF_STATE_KEY }}
+          STATE_REGION: ${{ vars.AWS_REGION }}
+        run: |
+          terraform init -input=false -lockfile=readonly \
+            -backend-config="bucket=${TF_STATE_BUCKET}" \
+            -backend-config="key=${TF_STATE_KEY}" \
+            -backend-config="region=${STATE_REGION}"
+
+      - name: Baixar o plano aprovado e conferir o SHA-256
+        env:
+          TF_STATE_BUCKET: ${{ secrets.TF_STATE_BUCKET }}
+          PLAN_KEY: ${{ needs.plan.outputs.plan_key }}
+          PLAN_SHA256: ${{ needs.plan.outputs.plan_sha256 }}
+        run: |
+          set -euo pipefail
+          [[ "${PLAN_KEY}" =~ ^plans/[0-9]+-[0-9]+/tfplan$ && "${PLAN_SHA256}" =~ ^[0-9a-f]{64}$ ]] || {
+            echo "::error::Saidas do job plan ausentes ou invalidas."; exit 1; }
+          aws s3 cp "s3://${TF_STATE_BUCKET}/${PLAN_KEY}" tfplan --only-show-errors
+          echo "${PLAN_SHA256}  tfplan" | sha256sum -c -
+
+      # Sem -auto-approve: o gate e a aprovacao do environment "infra". O apply usa exatamente o plano revisado.
+      - name: terraform apply do plano revisado
         run: terraform apply -input=false tfplan
 
       - name: Lembrete pos-destroy

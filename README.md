@@ -78,7 +78,7 @@ Cada decisão tem um ADR em [`docs/adr/`](docs/adr/README.md). Todas vêm de [`0
 simple-api/
 ├── application/       # API Node.js + Express + pg, Dockerfile e testes
 ├── infrastructure/    # Terraform: bootstrap/, raiz da stack, modules/, environments/, config/
-├── .github/workflows/ # ci.yml, deploy.yml, infra.yml
+├── .github/workflows/ # ci.yml, deploy.yml, infra.yml, eks-lab.yml
 ├── docs/              # ADRs, arquitetura, autoscaling, DR e benchmark local
 ├── tests/load/        # script k6, driver e resultados do benchmark LOCAL
 ├── tools/             # residual-check.sh (varredura de resíduos após destroy) e console-utf8.ps1 (UTF-8 no console do Windows)
@@ -204,12 +204,18 @@ Três workflows em [`.github/workflows/`](.github/workflows):
 |---|---|---|---|
 | [`ci.yml`](.github/workflows/ci.yml) | `pull_request` | nenhum | `gha-plan` (leitura), só no job `plan` e só para PR do mesmo repositório |
 | [`deploy.yml`](.github/workflows/deploy.yml) | push na `main` com mudança em `application/**`, ou `workflow_dispatch` com `only_build` | `deploy` | `gha-deploy` |
-| [`infra.yml`](.github/workflows/infra.yml) | `workflow_dispatch` com `plan`, `apply` ou `destroy` e a tag da imagem | `infra`, com aprovação manual | `gha-infra` |
+| [`infra.yml`](.github/workflows/infra.yml) | `workflow_dispatch` com `plan`, `apply` ou `destroy`, a tag da imagem e, só para mudança destrutiva, `confirm_destructive=dev` | job `plan`: `infra-plan` (sem aprovação); job `apply`: `infra`, com aprovação manual | `gha-infra-plan` (leitura e grava o plano) no `plan`; `gha-infra` no `apply` |
+| [`eks-lab.yml`](.github/workflows/eks-lab.yml) | `workflow_dispatch` (`up`/`down`) e agendamento horário (destroy por TTL) | `eks-lab` (sem aprovação) | `gha-eks-lab` |
 
-- **Autenticação:** somente OIDC, sem access keys. Cada role aceita um `sub` exato: `repo:<GITHUB_OWNER>/simple-api:pull_request`, `...:environment:deploy` e `...:environment:infra`. Um environment por workflow garante que um workflow não assume a role de outro ([ADR 0009](docs/adr/0009-pipeline-com-oidc-e-um-environment-por-workflow.md)).
+- **Autenticação:** somente OIDC, sem access keys. Cada role aceita um `sub` exato, com o contexto `pull_request`, `environment:deploy`, `environment:infra-plan`, `environment:infra` ou `environment:eks-lab`. Um environment por contexto garante que um workflow não assume a role de outro ([ADR 0009](docs/adr/0009-pipeline-com-oidc-e-um-environment-por-workflow.md)).
 - **Imagem:** construída uma vez, com a tag igual ao SHA do commit, para `linux/amd64` e `linux/arm64`. As tags do ECR são imutáveis, então o push é pulado se a tag já existe. O scan (Trivy) e o deploy usam o digest gravado no ECR, sem rebuild. [FATO: [`deploy.yml`](.github/workflows/deploy.yml) linhas 54-137]
 - **Deploy:** renderiza a task definition ativa com a imagem nova, atualiza o service, espera estabilidade, roda o smoke test (`GET /` e `GET /connect` = 200) e, se algo falhar, volta o service para a revisão anterior. [FATO: [`deploy.yml`](.github/workflows/deploy.yml) linhas 146-214]
-- **Infra:** `plan` salvo, aprovação do environment `infra` e `apply` do plano salvo. Nada de `terraform apply` em `ci.yml` ou `deploy.yml`.
+- **Infra:** dois jobs, e a aprovação acontece **depois** do plano.
+  - Job `plan`: gera o plano, mostra no resumo do run quanto vai criar, alterar, destruir e substituir, e **lista o que será destruído ou substituído**.
+  - Plano destrutivo (algum `delete` ou `replace`) só segue com `confirm_destructive=dev`. Sem isso, o run para antes do gate.
+  - O plano fica no bucket de state com o SHA-256.
+  - Job `apply`: depois que você aprova o gate `infra`, baixa o plano, confere o hash e aplica exatamente ele.
+  - Nada de `terraform apply` em `ci.yml` ou `deploy.yml`.
 - **Actions** de terceiros fixadas por SHA de commit, com a tag em comentário.
 
 ### Ordem do primeiro deploy
@@ -225,7 +231,7 @@ flowchart LR
 ```
 
 1. **Bootstrap** ([`infrastructure/bootstrap`](infrastructure/bootstrap/main.tf)): aplicado uma vez, localmente, com aprovação e um perfil de escrita. Cria o bucket de state, o ECR, o budget e o OIDC com as roles. O state local é sensível: nunca versionar nem abrir. Exemplo de variáveis em [`terraform.tfvars.example`](infrastructure/bootstrap/terraform.tfvars.example), com `<GITHUB_OWNER>` e `<EMAIL>` como placeholders.
-2. **GitHub:** criar os environments `deploy` e `infra` (só a branch `main`; aprovação obrigatória no `infra`) e as variáveis do repositório: `AWS_PLAN_ROLE_ARN`, `AWS_DEPLOY_ROLE_ARN`, `AWS_INFRA_ROLE_ARN`, `TF_STATE_BUCKET`, `TF_STATE_KEY` e `AWS_REGION`. `API_URL` (saída `api_endpoint` da stack) só é necessária depois do passo 3, para o smoke test.
+2. **GitHub:** criar os environments `deploy`, `infra` e `infra-plan` (e `eks-lab` para o lab), todos só com a branch `main` e com aprovação obrigatória só no `infra`. Variáveis do repositório: `AWS_PLAN_ROLE_ARN`, `AWS_DEPLOY_ROLE_ARN`, `AWS_INFRA_ROLE_ARN`, `TF_STATE_BUCKET`, `TF_STATE_KEY` e `AWS_REGION`. No environment `infra-plan`, o secret `AWS_INFRA_PLAN_ROLE_ARN`. `API_URL` (saída `api_endpoint` da stack) só é necessária depois do passo 3, para o smoke test.
 3. **Primeira imagem:** `deploy.yml` com `only_build = true` publica a imagem no ECR sem tocar no ECS. Sem ela a task não sobe.
 4. **Stack:** `infra.yml` com `action = apply` e a tag dessa imagem.
 5. **Deploys seguintes:** a cada push em `application/**` na `main`. Se o service ainda não existe, o deploy falha com uma mensagem pedindo o `infra.yml`. [FATO: [`deploy.yml`](.github/workflows/deploy.yml) linhas 152-156]
@@ -322,7 +328,7 @@ Estado em 14/10/2026 (fim da janela 3): a stack foi criada na AWS três vezes (1
 - A API é pública e sem autenticação (contrato do desafio).
 - Usuário do banco só com `CONNECT`: **implementado e validado na AWS em 14/10/2026** (autenticação IAM do RDS, [ADR 0013](docs/adr/0013-usuario-da-app-so-connect-via-iam.md), runbook em [`docs/usuario-db-iam.md`](docs/usuario-db-iam.md)): a role da API não lê o segredo master e, como `app_connect`, criar objetos ou virar master é negado. **Custo medido:** a autenticação IAM usa ~117 MiB de RAM e ~150 MiB de swap no `db.t4g.micro` (confirmado por A/B na mesma instância); 2 h de soak a 600 req/s com 0% de erro. Margem de memória fina; **decisão do Leandro (14/10): manter o IAM no `db.t4g.micro`** (ADR 0013). A app pré-aquece o token e a primeira conexão na partida, como mitigação do 503 da primeira conexão fria. Medido na AWS em 14/10: depois de um restart, o primeiro `/connect` deu 200 em 0,84 s; antes dava 503 em 2 s. Na primeiríssima partida, antes do `db-init`, o pré-aquecimento só registra o `28P01` e a app continua no ar. O `dev.tfvars` está em `db_iam_auth = true`; com `false` volta ao modo anterior (master).
 - A role `gha-infra` cria roles e policies com prefixo `simple-api-*` com conteúdo livre (escalada dentro do prefixo). O IAM Access Analyzer não foi usado para validar as policies.
-- O `infra.yml` tem um job só: a aprovação acontece antes do plan ser visto. Separar `plan` e `apply` é melhoria pendente.
+- (Resolvido em 14/10) O `infra.yml` tinha um job só, e a aprovação vinha antes de o plan ser visto. Hoje tem dois jobs (plan, depois gate e apply do plano revisado) e exige `confirm_destructive` em mudança destrutiva ([ADR 0009](docs/adr/0009-pipeline-com-oidc-e-um-environment-por-workflow.md)). Um `apply` real pelo fluxo novo ainda não foi feito.
 - O `trivy-action` roda no job do `deploy.yml` que tem credenciais AWS temporárias, e o job `plan` do `ci.yml` executa HCL do próprio PR com a role de leitura.
 - A saída das tasks em 443 e 53 para `0.0.0.0/0` é necessária sem NAT, mas é ampla.
 - O SHA-256 do CA bundle da RDS é fixado por TOFU (a AWS não publica checksum). Em 14/10 a AWS trocou o arquivo e o build falhou como projetado. Conferi certificado a certificado: passou de 111 para 114, entraram só as 3 raízes da região sa-west-1 e nenhuma saiu. Depois disso atualizei o hash (PR #22).

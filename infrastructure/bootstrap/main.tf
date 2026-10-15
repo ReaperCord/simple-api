@@ -1,6 +1,6 @@
 # Root de bootstrap: aplicado UMA vez, com state LOCAL (nunca versionado, nunca aberto: e sensivel).
 # Cria o que a stack principal precisa existir antes: bucket de state, repositorio ECR, budget
-# e o acesso do GitHub Actions (OIDC + roles gha-plan, gha-deploy e gha-infra).
+# e o acesso do GitHub Actions (OIDC + roles gha-plan, gha-deploy, gha-infra, gha-infra-plan e gha-eks-lab).
 # Nenhum apply roda sem aprovacao explicita do Leandro (AGENTS.md, regras 7 e 12).
 
 data "aws_caller_identity" "current" {}
@@ -49,6 +49,35 @@ resource "aws_s3_bucket_public_access_block" "state" {
   restrict_public_buckets = true
 }
 
+# Planos salvos pelo infra.yml (plans/<run>/tfplan): so servem entre o job plan e o job apply do mesmo run.
+# Expiram em 7 dias (e as versoes antigas em 1), para nao acumular planos com dados do ambiente. O state nao e afetado.
+resource "aws_s3_bucket_lifecycle_configuration" "state" {
+  bucket = aws_s3_bucket.state.id
+
+  rule {
+    id     = "expira-planos-salvos"
+    status = "Enabled"
+
+    filter {
+      prefix = "plans/"
+    }
+
+    expiration {
+      days = 7
+    }
+
+    noncurrent_version_expiration {
+      noncurrent_days = 1
+    }
+
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 1
+    }
+  }
+
+  depends_on = [aws_s3_bucket_versioning.state]
+}
+
 # ---------------------------------------------------------------------------------------------
 # ECR (a primeira imagem e publicada entre o bootstrap e a stack; ver 06-cicd.md).
 # ---------------------------------------------------------------------------------------------
@@ -71,7 +100,7 @@ module "budget" {
 }
 
 # ---------------------------------------------------------------------------------------------
-# OIDC do GitHub + roles do pipeline (gha-plan, gha-deploy, gha-infra). SEM gha-eks-lab.
+# OIDC do GitHub + roles do pipeline (gha-plan, gha-deploy, gha-infra, gha-infra-plan e gha-eks-lab).
 # Os nomes de cluster, service e roles da task seguem a convencao de local.name do root principal.
 # ---------------------------------------------------------------------------------------------
 module "oidc" {
