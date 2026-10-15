@@ -2,365 +2,388 @@
   <img src="https://media.licdn.com/dms/image/v2/D4D0BAQFqqkJoRRTbvg/company-logo_200_200/B4DZzUkmmOIwAI-/0/1773092891383/kxctecnologia_logo?e=2147483647&v=beta&t=ur-oxF2eamhQF4g4fDQjh6sy1lmH9W7pnOIrNAYOOzg" alt="KXC Tecnologia" width="120" />
 </p>
 
-# Simple-api
+# Simple-api na AWS
 
-Repositório do Desafio Técnico KXC (Arquiteto de Cloud AWS). Uma API em Node.js que consulta um PostgreSQL, empacotada em container e provisionada na AWS por Terraform, com pipeline de CI/CD no GitHub Actions.
+Entrega do **Desafio Técnico de Arquiteto de Cloud (AWS) da KXC Tecnologia**: uma API Node.js que consulta um PostgreSQL, publicada na AWS com Dockerfile, Terraform e CI/CD no GitHub Actions, numa VPC própria.
 
-**Estado em 13/10/2026:** o código da aplicação, o Terraform e os workflows estão escritos e passam nas verificações locais e nos jobs de CI do PR #1 que não precisam de credencial (app, sast, dockerfile, iac, secrets e workflows ficaram verdes; o job `plan` foi pulado porque o state em S3 ainda não existe). **Nada foi aplicado na AWS.** Não existe `plan` com backend real, recurso criado nem número de desempenho medido na AWS. A seção [Pendências](#pendências) lista o que não foi verificado.
+**Estado em 15/10/2026:**
+- A stack foi aplicada, testada e destruída na AWS em cinco janelas, entre 13 e 15/10.
+- Os testes cobriram carga, spike com autoscaling, soak de 2 h, restore PITR e um laboratório EKS.
+- Hoje a stack está **destruída**. Só o bootstrap continua aplicado: bucket de state, ECR, budget e as roles da pipeline.
+- Cada número deste README vem de uma medição com arquivo de dados no repositório.
 
-Rótulos usados nos documentos: `[FATO: fonte]` foi lido no repositório ou numa fonte citada, `[HIPÓTESE]` é inferência não confirmada, `[PROPOSTA]` é recomendação.
+Sumário:
+1. [O desafio e o que foi entregue](#1-o-desafio-e-o-que-foi-entregue)
+2. [Inconsistências do repositório recebido](#2-inconsistências-do-repositório-recebido)
+3. [Arquitetura](#3-arquitetura): [diagrama](#31-diagrama), [fluxo e security groups](#32-fluxo-da-internet-até-o-banco-e-security-groups), [decisões e trade-offs](#33-decisões-e-trade-offs)
+4. [Plano de autoscaling](#4-plano-de-autoscaling)
+5. [Plano de disaster recovery](#5-plano-de-disaster-recovery)
+6. [CI/CD](#6-cicd)
+7. [Segurança e least privilege](#7-segurança-e-least-privilege)
+8. [FinOps e custo real](#8-finops-e-custo-real)
+9. [Resultados medidos na AWS](#9-resultados-medidos-na-aws)
+10. [Diferencial: laboratório EKS](#10-diferencial-laboratório-eks)
+11. [Como executar](#11-como-executar)
+12. [Estrutura do repositório e documentação](#12-estrutura-do-repositório-e-documentação)
+13. [O que ficou pendente](#13-o-que-ficou-pendente)
 
-## Visão geral
+---
 
-A API tem três rotas ([`application/README.md`](application/README.md)):
+## 1. O desafio e o que foi entregue
+
+### Requisitos obrigatórios
+
+| Requisito | Como foi atendido | Evidência |
+|---|---|---|
+| **Containerização** com Dockerfile otimizado | Multi-stage. Base Node 24 Alpine **fixada por digest**. Usuário `node` (uid 1000). Só dependências de produção. Bundle de CAs do RDS baixado com `ADD --checksum`. Imagem para `linux/arm64` e `linux/amd64`. | [`application/Dockerfile`](application/Dockerfile); hadolint e Trivy no CI |
+| **IaC** com Terraform para toda a base | VPC, subnets, rotas, security groups, RDS, ECS, API Gateway, Cloud Map, autoscaling, IAM e ECR em módulos. Três roots: bootstrap, stack principal e lab EKS. Nada foi criado pelo console. | [`infrastructure/`](infrastructure/README.md) |
+| **CI/CD** com build e deploy automático | Quatro workflows: `ci.yml` em todo PR; `deploy.yml` em push na `main`, com build, scan, deploy por digest, smoke e rollback; `infra.yml` com plan, aprovação e apply; `eks-lab.yml` para o lab. | [Seção 6](#6-cicd) |
+| **Ambiente isolado** numa VPC nova | VPC `10.100.0.0/16` no `dev`, em 2 AZs, com subnets públicas e privadas. `hml` e `prod` usam `10.110` e `10.120` pelo mesmo código. | [`environments/`](infrastructure/environments) |
+
+### Diferenciais
+
+| Diferencial | Como foi atendido |
+|---|---|
+| **FinOps, o desafio de ouro**: API Gateway no lugar do ALB | API Gateway HTTP API com integração privada por VPC Link V2 e descoberta das tasks no Cloud Map. **Não há ALB nem NAT Gateway.** Custo real das janelas de teste na [seção 8](#8-finops-e-custo-real). |
+| Serviços gerenciados (ECS, EKS) | ECS Fargate ARM64 na trilha principal. Um laboratório EKS efêmero atrás do mesmo API Gateway, com Argo CD ([seção 10](#10-diferencial-laboratório-eks)). |
+| PostgreSQL no RDS | RDS PostgreSQL 16 `db.t4g.micro` em subnets privadas, com TLS `verify-full` e autenticação IAM. |
+| Módulos Terraform | Módulos de rede, security group, IAM, RDS, ECS, API Gateway, Cloud Map, autoscaling, OIDC, ECR e budget, com `terraform test`. |
+| Least privilege (IAM) | Cinco roles da pipeline por OIDC, cada uma presa a um contexto. A role da app só pode `rds-db:connect` como um usuário que só tem `CONNECT` ([seção 7](#7-segurança-e-least-privilege)). |
+
+### A API
 
 | Rota | Comportamento |
 |---|---|
 | `GET /` | 200 com `API OK!`, sem tocar no banco |
-| `GET /connect` | 200 com a versão do PostgreSQL. Responde 503 com mensagem genérica se o banco falhar |
-| `GET /health` | 200 enquanto o processo está de pé (liveness). Não consulta o banco |
+| `GET /connect` | 200 com a versão do PostgreSQL. Se o banco falhar, 503 com mensagem genérica |
+| `GET /health` | 200 enquanto o processo está de pé (liveness, sem consultar o banco) |
 
-A API não tem autenticação (contrato do desafio). Na AWS a única proteção na borda é o throttling do API Gateway. [FATO: [`docker-compose.yml`](docker-compose.yml) linhas 4-5]
+A API não tem autenticação, por contrato do desafio. A proteção na borda é o throttling do API Gateway.
 
-## Arquitetura
+## 2. Inconsistências do repositório recebido
+
+O desafio avisa que o repositório tem inconsistências propositais e pede que ele seja tratado como um legado. Estas foram encontradas e tratadas:
+
+| # | Encontrado no legado | Tratamento |
+|---|---|---|
+| F-INF-2 | SG do ECS liberava a porta **8084**, mas a app escuta **3000** | Regra na 3000, aceita só a partir do SG do VPC Link |
+| F-INF-3 | SG do ECS sem saída para **5432**: a app não alcançaria o banco | Saída para 5432 só para o SG do RDS |
+| F-INF-4 | Placeholders `${ALB_SG_ID}`, `${NAT_GW_ID}` e `${IGW_ID}` nos JSON de regras e rotas | Regras por chave simbólica, resolvidas pelo Terraform ([ADR 0010](docs/adr/0010-regras-de-sg-por-chaves-simbolicas.md)) |
+| F-INF-9 | VPC sem `enable_dns_hostnames` (a zona privada do Cloud Map exige) | DNS ligado na VPC |
+| F-INF-10 | Service ECS sem circuit breaker nem `service_registries` | Circuit breaker com rollback e registro automático no Cloud Map |
+| F-INF-7 | `azs` fixas em `us-east-1a/b/c` no módulo de rotas | AZs lidas de `aws_availability_zones` |
+| F-INF-8 | `map_public_ip_on_launch` declarado e não usado | Usado: subnets públicas com IP público, privadas sem |
+| F-INF-11 | Sem módulos de ECR, RDS, API Gateway, Cloud Map, autoscaling e OIDC; sem provider nem backend | Módulos criados; backend S3 com lock nativo |
+| F-INF-5 | Policy do AWS Load Balancer Controller (EKS) no projeto de ECS | Usada só onde faz sentido: no controller do lab EKS |
+| F-INF-6 | Módulo `parameter-store` levaria o segredo ao tfstate | Não usado: a senha master é gerenciada pelo RDS |
+| F-INF-1, F-INF-12 | SG de ALB em 8080 e 443, listener em 80/HTTP, rota privada para um NAT inexistente | Não instanciados: o desenho não tem ALB nem NAT |
+| F-APP-3 | Um `new Client()` por requisição, sem timeout e sem `finally` | Pool com limite, timeouts de conexão e de consulta |
+| F-APP-4 | Conexão com o banco sem TLS | TLS `verify-full` com o bundle de CAs do RDS |
+| F-APP-6 | `npm audit`: 8 vulnerabilidades, 1 crítica (`proxy-addr`) | Dependências atualizadas; `npm audit` no CI |
+| F-APP-7 | Sem `Dockerfile` nem `.dockerignore` | Criados (seção 1) |
+
+Também entraram na aplicação:
+- `GET /health`;
+- logs JSON com `request_id`;
+- encerramento ordenado no SIGTERM, mais drenagem no SIGUSR2 para o EKS;
+- autenticação IAM no RDS.
+
+A lista completa, com a origem de cada item, está em [`docs/arquitetura.md`](docs/arquitetura.md#divergências-entre-a-steering-e-o-código).
+
+## 3. Arquitetura
+
+### 3.1 Diagrama
 
 ```mermaid
 flowchart LR
-    internet["Internet"]
+    cliente["Cliente"]
 
     subgraph aws["AWS us-east-1"]
-        apigw["API Gateway HTTP API<br/>HTTPS 443"]
-        cmap["Cloud Map<br/>registro SRV"]
+        apigw["API Gateway HTTP API<br/>HTTPS 443, throttling"]
+        cmap["Cloud Map<br/>registro SRV das tasks"]
+        servicos["ECR, CloudWatch Logs, STS"]
 
-        subgraph vpc["VPC isolada"]
-            subgraph publica["Subnets publicas"]
-                ecs["ECS Fargate ARM64<br/>0,5 vCPU e 1 GB<br/>porta 3000"]
+        subgraph vpc["VPC 10.100.0.0/16 (2 AZs)"]
+            igw["Internet Gateway"]
+            subgraph privada["Subnets privadas: só rota local"]
+                vpclink["VPC Link V2<br/>[SG vpclink]"]
+                rds[("RDS PostgreSQL 16<br/>db.t4g.micro, sem IP público<br/>[SG rds]")]
             end
-            subgraph privada["Subnets privadas"]
-                vpclink["VPC Link V2"]
-                rds[("RDS PostgreSQL<br/>db.t4g.micro, single-AZ")]
+            subgraph publica["Subnets públicas: rota para o IGW"]
+                ecs["ECS Fargate ARM64<br/>0,5 vCPU, 1 GB, porta 3000<br/>IP público, sem NAT<br/>[SG ecs]"]
             end
         end
     end
 
-    internet -->|"443"| apigw
-    apigw -.->|"DiscoverInstances"| cmap
-    apigw --> vpclink
-    vpclink -->|"3000"| ecs
-    ecs -->|"5432, TLS verify-full"| rds
-    ecs -.->|"registro automatico"| cmap
+    cliente -->|"HTTPS 443"| apigw
+    apigw -.->|"descobre as tasks"| cmap
+    apigw -->|"integração privada"| vpclink
+    vpclink -->|"tcp 3000"| ecs
+    ecs -->|"tcp 5432, TLS verify-full, IAM"| rds
+    ecs -.->|"registro automático"| cmap
+    ecs -->|"saída 443 e 53"| igw
+    igw --> servicos
 ```
 
-Sem ALB e sem NAT Gateway. As tasks ficam em subnet pública com IP público e só aceitam tráfego do security group do VPC Link. Security groups, tabela de regras, portas e o fluxo da internet até o banco estão em [`docs/arquitetura.md`](docs/arquitetura.md).
+- **Sem ALB e sem NAT.** O API Gateway chega às tasks pelo VPC Link V2, cujas interfaces ficam nas subnets privadas, e encontra as tasks pelo Cloud Map.
+- **As tasks ficam em subnet pública** com IP público, para baixar a imagem e mandar logs sem NAT. A entrada delas aceita só o SG do VPC Link.
+- **O RDS fica nas subnets privadas**, sem IP público e sem rota para a internet.
+- Detalhe completo, com sub-redes e rotas, em [`docs/arquitetura.md`](docs/arquitetura.md).
 
-## Decisões
+### 3.2 Fluxo da internet até o banco e security groups
 
-Cada decisão tem um ADR em [`docs/adr/`](docs/adr/README.md). Todas vêm de [`01-arquitetura-e-restricoes.md`](.kiro/steering/01-arquitetura-e-restricoes.md) e estão travadas.
+| # | Salto | Porta | Controle |
+|---|---|---|---|
+| 1 | Cliente → API Gateway | 443 | TLS gerenciado e throttling do estágio `$default` |
+| 2 | API Gateway → Cloud Map | n/a | A integração descobre IP e porta das tasks (registro SRV) |
+| 3 | API Gateway → VPC Link V2 | n/a | Integração privada; `overwrite:path` preserva o caminho |
+| 4 | VPC Link → tasks | tcp 3000 | Saída do SG `vpclink` e entrada do SG `ecs`, por referência de SG |
+| 5 | Tasks → RDS | tcp 5432 | Saída do SG `ecs` e entrada do SG `rds`; TLS `verify-full` e token IAM |
+| 6 | Tasks → internet | 443, 53 | Só saída, para ECR, CloudWatch Logs e STS (não há NAT) |
 
-| Decisão | Resumo | ADR |
+| SG | Entrada | Saída |
 |---|---|---|
-| Entrada | API Gateway HTTP API no lugar do ALB, por FinOps | [0001](docs/adr/0001-api-gateway-http-api-no-lugar-de-alb.md) |
-| Integração | VPC Link V2 e Cloud Map com registro SRV | [0002](docs/adr/0002-vpc-link-v2-e-cloud-map-srv.md) |
-| Compute | ECS Fargate ARM64, 0,5 vCPU e 1 GB, com base no benchmark LOCAL | [0003](docs/adr/0003-ecs-fargate-arm64-0-5-vcpu-1-gb.md) |
-| Banco | RDS PostgreSQL `db.t4g.micro`, single-AZ, privado | [0004](docs/adr/0004-rds-postgresql-db-t4g-micro-single-az-privado.md) |
-| Rede | Sem NAT, tasks em subnet pública com SG restrito | [0005](docs/adr/0005-sem-nat-tasks-em-subnet-publica.md) |
-| Segredos e TLS | `verify-full` e senha gerenciada pelo RDS, com rotação de 7 dias | [0006](docs/adr/0006-tls-verify-full-e-segredo-gerenciado-pelo-rds.md) |
-| EKS | Só como laboratório efêmero (não implementado) | [0007](docs/adr/0007-eks-somente-como-laboratorio-efemero.md) |
-| Terraform | Roots separados: bootstrap, principal e eks-lab | [0008](docs/adr/0008-terraform-com-roots-separados.md) |
-| Pipeline | OIDC e um environment por workflow | [0009](docs/adr/0009-pipeline-com-oidc-e-um-environment-por-workflow.md) |
-| Security groups | Regras por chaves simbólicas, não `templatefile()` | [0010](docs/adr/0010-regras-de-sg-por-chaves-simbolicas.md) |
-| DR | Backups automáticos e PITR (documentado, não implementado) | [0011](docs/adr/0011-dr-via-pitr.md) |
-| Divergência | Por que o desenho difere da "arquitetura alvo" (ALB e NAT) do autor | [0012](docs/adr/0012-divergencia-da-arquitetura-alvo.md) |
+| `vpclink` | nenhuma | tcp 3000 para o SG `ecs` |
+| `ecs` | tcp 3000 só do SG `vpclink` | tcp 5432 para o SG `rds`; tcp 443, udp e tcp 53 para `0.0.0.0/0` |
+| `rds` | tcp 5432 só do SG `ecs` | nenhuma |
 
-## Estrutura do repositório
+Nenhum SG aceita `0.0.0.0/0` na entrada: o módulo rejeita a regra na validação. As regras vêm de arquivos JSON em [`infrastructure/config/security_rules/`](infrastructure/config/security_rules).
 
+### 3.3 Decisões e trade-offs
+
+| Decisão | Ganho | Perda | ADR |
+|---|---|---|---|
+| **API Gateway, VPC Link V2 e Cloud Map** no lugar do ALB | Sem o custo fixo do ALB (US$ 16 a 22/mês, segundo o desafio); paga por requisição | Sem target group: a saúde depende do ECS e do Cloud Map; HTTP API não aceita AWS WAF; o Cloud Map cobra por consulta (medido: +6,8%) | [0001](docs/adr/0001-api-gateway-http-api-no-lugar-de-alb.md), [0002](docs/adr/0002-vpc-link-v2-e-cloud-map-srv.md) |
+| **Sem NAT**: tasks em subnet pública | Evita US$ 32,85/mês mais US$ 0,045/GB do NAT Gateway | IPv4 público por task (US$ 3,65/mês); saída 443 e 53 ampla | [0005](docs/adr/0005-sem-nat-tasks-em-subnet-publica.md) |
+| **Fargate ARM64**, 0,5 vCPU e 1 GB | vCPU ~20% mais barato que x86 (US$ 0,0324 contra 0,0406/h, na fatura) | Imagem multi-arch no build | [0003](docs/adr/0003-ecs-fargate-arm64-0-5-vcpu-1-gb.md) |
+| **RDS `db.t4g.micro` single-AZ**, privado | Gerenciado e elegível ao Free Tier | Sem failover automático; o Free plan desta conta só aceitou 1 dia de backup | [0004](docs/adr/0004-rds-postgresql-db-t4g-micro-single-az-privado.md), [0011](docs/adr/0011-dr-via-pitr.md) |
+| **Autenticação IAM no banco** | Sem senha na aplicação; usuário só com `CONNECT` | ~117 MiB de RAM a mais no micro (A/B medido); passo de `db-init` | [0013](docs/adr/0013-usuario-da-app-so-connect-via-iam.md) |
+| **Três roots de Terraform** | Ciclos de vida isolados: o bootstrap fica, a stack sobe e desce, o lab vive até 5 h | Mais de um state para cuidar | [0008](docs/adr/0008-terraform-com-roots-separados.md) |
+| **EKS só como lab efêmero** | Prova a mesma app em Kubernetes sem pagar o plano de controle o mês todo | Complexidade extra, isolada num root próprio | [0007](docs/adr/0007-eks-somente-como-laboratorio-efemero.md), [0014](docs/adr/0014-lab-eks-com-argo-cd-core-e-nlb-interno.md) |
+
+Em resumo, a arquitetura troca custo fixo por complexidade controlada. A resiliência do banco ficou menor de propósito, num ambiente de avaliação. Para produção, 7 dias de backup é mudança de `tfvars` numa conta paga, e Multi-AZ exige expor uma variável no módulo do RDS (hoje `multi_az = false` fixo). Todas as decisões estão em [`docs/adr/`](docs/adr/README.md), inclusive a divergência da arquitetura alvo do autor ([ADR 0012](docs/adr/0012-divergencia-da-arquitetura-alvo.md)).
+
+## 4. Plano de autoscaling
+
+ECS Service Auto Scaling por **target tracking** ([`modules/autoscaling`](infrastructure/modules/autoscaling), detalhes em [`docs/autoscaling.md`](docs/autoscaling.md)):
+
+| Parâmetro | Valor |
+|---|---|
+| Métrica | CPU média do service (`ECSServiceAverageCPUUtilization`) |
+| Alvo | 60% |
+| Tasks | mínimo 1, máximo 3 |
+| Scale-out | alarme com 3 períodos de 1 min acima de 60%; cooldown 60 s |
+| Scale-in | alarme com 15 períodos de 1 min abaixo de 54%; cooldown 300 s |
+| Deploy | até 200% das tasks, 100% saudáveis, circuit breaker com rollback |
+
+**Como o roteamento acompanha o scaling.** O ECS registra e remove cada task no Cloud Map sozinho, pelo `service_registries` (registro SRV, TTL 10 s). O API Gateway descobre as tasks pelo Cloud Map pela integração do VPC Link. Nenhum target group precisa ser atualizado.
+
+**Medido num spike de 100 para 1.500 req/s (13/10):**
+- A decisão de escalar veio ~5 min depois do salto, e a task nova estava rodando ~44 s depois.
+- Foram 3 tasks em ~8,7 min, e a volta a 1 task levou ~22 min.
+- O erro total foi de 0,040% de 5xx.
+- **Ponto fraco medido:** a task única saturou por ~5 min antes da reação. Para produção: mínimo de 2 tasks ou scaling por requisições.
+
+## 5. Plano de disaster recovery
+
+Detalhes, testes e registros com horário estão em [`docs/dr.md`](docs/dr.md).
+
+| Cenário | RPO | RTO | Estratégia |
+|---|---|---|---|
+| Erro lógico ou corrupção, mesma região | meta de 5 min; observado de 3 a 8 min | **medido: 18,5 min** | Restore PITR para uma instância nova, policy IAM e troca do endpoint |
+| Perda da instância | último backup retido | meta de 30 a 60 min | Restore de backup automático ou snapshot e `terraform apply` |
+| Perda da região | minutos (backup replicado) a 24 h (cópia diária de snapshot) | a medir | O mesmo Terraform em outra região, a partir do backup copiado |
+
+- **Como os objetivos são atingidos:** o RDS envia logs de transação ao S3 a cada ~5 min, o que permite PITR com RPO de minutos. Os 18,5 min foram: restore de 15,9 min, ajuste da policy IAM em 4 s e troca do endpoint em 2,6 min (teste de 14/10).
+- **Retenção:** o módulo aceita 7 dias, mas o Free plan desta conta recusa (`FreeTierRestrictionError`), e o `dev` usa 1 dia. Multi-AZ está fixo em `false` no módulo e precisaria virar variável.
+- **Recriar em outra região ou conta:** o Terraform é idempotente e não fixa região nem conta. Os ARNs são montados a partir de `aws_caller_identity`, e a região e os CIDRs vêm do `tfvars`. O caminho: bootstrap na conta ou região nova, `deploy.yml` com `only_build` para publicar a imagem no ECR novo, `infra.yml apply` com o backend e o `tfvars` do destino, e por fim o restore do banco.
+- **Não testado:** cópia entre regiões e restore em outra conta.
+
+## 6. CI/CD
+
+```mermaid
+flowchart LR
+    pr["PR"] --> ci["ci.yml<br/>testes, SAST, Dockerfile, IaC,<br/>segredos, workflows, plan"]
+    push["push na main<br/>application/"] --> dep["deploy.yml<br/>build ARM64 e x86, Trivy por digest,<br/>SBOM, deploy por digest, smoke, rollback"]
+    manual["manual"] --> plan["infra.yml: plan<br/>role de leitura, resumo do que<br/>será destruído, SHA-256"]
+    plan --> gate{"aprovação<br/>humana"}
+    gate --> apply["infra.yml: apply<br/>do plano revisado"]
 ```
-simple-api/
-├── application/       # API Node.js + Express + pg, Dockerfile e testes
-├── infrastructure/    # Terraform: bootstrap/, raiz da stack, modules/, environments/, config/
-├── .github/workflows/ # ci.yml, deploy.yml, infra.yml, eks-lab.yml
-├── docs/              # ADRs, arquitetura, autoscaling, DR e benchmark local
-├── tests/load/        # script k6, driver e resultados do benchmark LOCAL
-├── tools/             # residual-check.sh (varredura de resíduos após destroy) e console-utf8.ps1 (UTF-8 no console do Windows)
-├── .kiro/steering/    # decisões e regras do projeto (fonte das decisões travadas)
-├── AGENTS.md          # contrato de trabalho para agentes de IA
-└── docker-compose.yml # ambiente local: Postgres 16 e a API
-```
 
-Detalhes da aplicação em [`application/README.md`](application/README.md) e da infraestrutura em [`infrastructure/README.md`](infrastructure/README.md).
+| Workflow | Gatilho | Environment | Role AWS (OIDC) |
+|---|---|---|---|
+| [`ci.yml`](.github/workflows/ci.yml) | `pull_request` | nenhum | `gha-plan` (leitura), só no job `plan` |
+| [`deploy.yml`](.github/workflows/deploy.yml) | push na `main` com mudança em `application/**`, ou manual com `only_build` | `deploy` | `gha-deploy` |
+| [`infra.yml`](.github/workflows/infra.yml) | manual: `plan`, `apply` ou `destroy`, a tag da imagem e `confirm_destructive` para mudança destrutiva | `infra-plan` no plan; `infra`, com aprovação, no apply | `gha-infra-plan` no plan; `gha-infra` no apply |
+| [`eks-lab.yml`](.github/workflows/eks-lab.yml) | manual (`up`, `down`, `gc`) e agendamento horário | `eks-lab` | `gha-eks-lab` |
 
-## Como executar localmente
+- **CI:** 8 jobs em todo PR. São testes, lint e `npm audit` da app; Semgrep; gitleaks; hadolint, build e Trivy da imagem; `terraform fmt`, `validate`, `test`, tflint e Trivy de configuração; actionlint e shellcheck; testes dos scripts de `tools/`; e `terraform plan` com o state real.
+- **Deploy:**
+  - a imagem é construída uma vez, com a tag igual ao SHA do commit;
+  - o scan e o deploy usam o digest, sem rebuild;
+  - o service é atualizado e espera estabilidade, e então roda o smoke (`GET /` e `GET /connect`);
+  - se algo falhar, o service volta para a revisão anterior.
+- **Infra:** a aprovação acontece **depois** do plano.
+  - O job `plan` lista no resumo o que será destruído ou substituído.
+  - Um plano destrutivo exige `confirm_destructive=dev`; sem isso, o run para antes do gate.
+  - O job `apply` confere o SHA-256 e aplica exatamente o plano revisado.
+  - Validado de ponta a ponta na AWS em 14/10.
+- **Actions** de terceiros fixadas por SHA de commit.
 
-Pré-requisito: Docker com Compose. O ambiente local sobe um Postgres 16 com autenticação SCRAM e a API, sem TLS (`DB_SSLMODE=disable`) e sem Secrets Manager. Não é usado na AWS. [FATO: [`docker-compose.yml`](docker-compose.yml) e [`application/.env.example`](application/.env.example)]
+## 7. Segurança e least privilege
 
-1. Copiar o exemplo de variáveis e trocar o placeholder da senha. O arquivo `application/.env` é ignorado pelo git.
+**Pipeline por OIDC, sem access keys.** Cada role aceita um único `sub` do token do GitHub, então um workflow não consegue assumir a role de outro:
 
-   ```powershell
-   Copy-Item application/.env.example application/.env
-   # edite application/.env e troque <DB_PASSWORD> por uma senha local
-   ```
-
-   ```bash
-   cp application/.env.example application/.env
-   ```
-
-2. Subir os containers. O `--env-file` é necessário: o serviço `db` exige `DB_USER`, `DB_PASSWORD` e `DB_DATABASE` e falha sem eles.
-
-   ```bash
-   docker compose --env-file application/.env up --build
-   ```
-
-3. Testar. As portas ficam publicadas só em `127.0.0.1`.
-
-   ```bash
-   curl http://127.0.0.1:3000/
-   curl http://127.0.0.1:3000/connect
-   curl http://127.0.0.1:3000/health
-   ```
-
-Variáveis do `application/.env.example`:
-
-| Variável | Valor de exemplo | Observação |
+| Role | Contexto aceito (`sub`) | Pode |
 |---|---|---|
-| `API_PORT` | `3000` | Porta da API |
-| `DB_HOST` | `db` | Nome do serviço no Compose (o Compose também fixa este valor) |
-| `DB_PORT` | `5432` | |
-| `DB_DATABASE` | `simple_api` | |
-| `DB_USER` | `simple_api` | |
-| `DB_PASSWORD` | `<DB_PASSWORD>` | Placeholder: trocar. Obrigatória quando `DB_SECRET_ARN` não está definido |
-| `DB_POOL_MAX` | `3` | Mesmo valor usado na AWS. Padrão do código: 5 |
-| `DB_SSLMODE` | `disable` | Só local. O padrão do código é `verify-full` e exige `DB_SSL_CA_FILE` |
-| `LOG_LEVEL` | `info` | `debug`, `info`, `warn` ou `error` |
+| `gha-plan` | `pull_request` | só leitura e o lock do state |
+| `gha-infra-plan` | `environment:infra-plan` | as mesmas leituras, mais gravar o plano em `plans/` |
+| `gha-infra` | `environment:infra` | aplicar a stack; IAM só no prefixo do projeto |
+| `gha-deploy` | `environment:deploy` | push no ECR do projeto e `UpdateService` |
+| `gha-eks-lab` | `environment:eks-lab` | só o root do lab EKS |
 
-A lista completa de variáveis, inclusive `DB_SSL_CA_FILE`, `DB_SECRET_ARN` e `SHUTDOWN_TIMEOUT_MS`, está em [`application/README.md`](application/README.md). O container da API roda com 0,5 CPU, 1 GB de memória e sistema de arquivos somente leitura, para se parecer com a task do Fargate. [FATO: [`docker-compose.yml`](docker-compose.yml) linhas 37-39]
+Cada permissão foi fechada de forma iterativa: cada `AccessDenied` real virou uma ação na policy, com o motivo em comentário. Antes de corrigir, a causa foi confirmada no `iam simulate-principal-policy` e, para data sources, no log de debug do Terraform ([`modules/oidc/main.tf`](infrastructure/modules/oidc/main.tf)).
 
-## Como validar
+**Aplicação.** A task role só tem `rds-db:connect` para o usuário `app_connect` daquela instância. No banco, esse usuário só tem `CONNECT`: criar objetos ou virar master é negado (`42501`, medido). A credencial master fica num segredo gerenciado pelo RDS e só é usada pela task de `db-init` ([`docs/usuario-db-iam.md`](docs/usuario-db-iam.md)).
 
-Todas as verificações abaixo rodam sem credencial AWS. O CI executa o mesmo conjunto em cada pull request ([`ci.yml`](.github/workflows/ci.yml)).
+**Contêiner e dados.**
+- O contêiner roda como não-root, com sistema de arquivos somente leitura no EKS.
+- O TLS com o banco é `verify-full`.
+- O bundle de CAs é conferido por SHA-256: em 14/10 a AWS acrescentou 3 CAs e o build barrou até a conferência.
+- Nenhum account id, e-mail ou segredo fica no repositório, que é público. Os logs das Actions mascaram o account id.
 
-### Aplicação (container Node 24)
+## 8. FinOps e custo real
 
-O projeto exige Node 24 (`engines.node` = `>=24 <25`), e a máquina de desenvolvimento tem Node 22. Por isso os testes rodam num container, com uma cópia do código para não escrever no repositório:
+**Custo real** (Cost Explorer, bruto, em dias UTC; todo coberto por crédito):
+
+| Período | Uso bruto | O que rodou |
+|---|---|---|
+| 13/10 | US$ 1,48 | Janela 1: carga, spike com autoscaling, restore PITR |
+| 14/10 | US$ 1,28 | Janela 2 (soak de 2 h, séries, A/B do IAM, DR) e janela 3 (lab EKS) |
+| 15/10 (manhã) | US$ 0,21 | Fim da janela 3 e teste do `infra.yml` (dia ainda aberto na consulta) |
+
+- **A janela do EKS** custou US$ 0,52 nas linhas exclusivas do lab: 4,43 h de plano de controle e 3 h de NLB. Os nós `t4g.small` saíram a **US$ 0**, pelo Free Tier.
+- **Custo fixo evitado:** o ALB (US$ 16 a 22/mês) e o NAT Gateway (US$ 32,85/mês mais tráfego).
+- **Estimativa da stack ECS em 24x7:** ~US$ 34/mês (RDS, uma task Fargate e um IPv4).
+- **Medido em 13/10:** o Cloud Map fez ~1 consulta a cada 15 requisições do API Gateway, e não uma por requisição.
+
+Detalhes em [`docs/plano/05-custo-real.md`](docs/plano/05-custo-real.md).
+
+**Guardrails:**
+- **Budget:** mensal de US$ 45, **sem créditos**, para que o gasto real dispare o alerta. Avisos em US$ 5, 50%, 80% e 100%.
+- **Janelas:** a stack só fica no ar durante a janela e é destruída ao fim. Depois do destroy, o [`tools/residual-check.sh`](tools/residual-check.sh) procura resíduos que ainda cobram.
+- **TTL do lab EKS:** um vigia determinístico destrói o lab quando o TTL vence. O agendamento do GitHub se mostrou não confiável: rodou 3 vezes em 17 h.
+- **Taxonomia de tags:** `Project` (grupo) > `Track` (subgrupo) > `Component` (componente), em todo recurso dos três roots e nos labels do Kubernetes. Serve para filtrar custo e falhas por componente.
+
+## 9. Resultados medidos na AWS
+
+| Teste | Resultado | Dados |
+|---|---|---|
+| Carga dentro da VPC (1 task, 0,5 vCPU, `/connect`) | Até **1.500 req/s sem erro**; o ponto de quebra não foi atingido (CPU de 85% a 100% no topo) | [`benchmark-aws.md`](docs/performance/benchmark-aws.md) |
+| Soak de 2 h a 600 req/s | **0% de erro** em 4,32 milhões de requisições; p50 de 0,84 a 0,90 ms, sem deriva | idem |
+| Spike pelo API Gateway com autoscaling | 0,040% de 5xx; 1 → 3 tasks em ~8,7 min | [`autoscaling.md`](docs/autoscaling.md) |
+| Restore PITR com troca de endpoint | **RTO de 18,5 min**; RPO observado de 3 a 8 min | [`dr.md`](docs/dr.md) |
+| Rolling restart no EKS com tráfego | **0 falhas em 2.081** requisições, depois de cross-zone, readiness gate e `preStop` de 40 s (antes: 0,28% a 0,30%) | [`tests/k8s/`](tests/k8s) |
+| Custo da autenticação IAM no RDS | ~117 MiB de RAM e ~150 MiB de swap a mais, por A/B na mesma instância | [`benchmark-aws.md`](docs/performance/benchmark-aws.md) |
+
+**Ressalvas:**
+- Uma execução de cada teste, exceto as três séries de carga, que variaram muito entre tasks: a 500 req/s, a CPU ficou entre 33% e 56%.
+- Números de dentro da VPC não incluem a rede do cliente.
+- O throttling do estágio (50 req/s) limitou o teste a partir do Brasil.
+
+## 10. Diferencial: laboratório EKS
+
+Um cluster EKS 1.36 efêmero roda a mesma imagem atrás do **mesmo API Gateway**, nas rotas `/eks`.
+- **Caminho:** VPC Link, depois um NLB interno criado pelo AWS Load Balancer Controller, depois os pods.
+- **Banco:** a app usa Pod Identity e autenticação IAM no RDS, sem segredo no cluster.
+- **GitOps:** o Argo CD (componentes core) aplica a `main` e desfaz deriva. O dashboard abre na máquina do operador com `argocd admin dashboard`, sem expor nada.
+- **TTL:** de 1 a 5 h, com vigia.
+
+Subir o lab de verdade exigiu correções, todas com causa medida e registrada. As principais:
+- **metrics-server v0.9.0** corrompia o `/openapi/v2` do cluster e quebrava o helm e o Argo CD; o lab voltou para a v0.8.1.
+- **Cross-zone do NLB** desligado travava conexões quando o pod trocava de AZ.
+- **O NLB continua mandando fluxos ao alvo removido** por mais de 8 s. A correção foi um `preStop` de 40 s, que zerou as falhas no rolling restart.
+
+Runbook em [`docs/eks-lab.md`](docs/eks-lab.md); decisões e histórico no [ADR 0014](docs/adr/0014-lab-eks-com-argo-cd-core-e-nlb-interno.md).
+
+## 11. Como executar
+
+### Localmente (custo zero)
+
+Pré-requisito: Docker com Compose. O Compose sobe um Postgres 16 com SCRAM e a API, sem TLS (`DB_SSLMODE=disable`).
+
+```bash
+cp application/.env.example application/.env   # troque <DB_PASSWORD> por uma senha local
+docker compose --env-file application/.env up --build
+curl http://127.0.0.1:3000/ && curl http://127.0.0.1:3000/connect && curl http://127.0.0.1:3000/health
+```
+
+Variáveis em [`application/README.md`](application/README.md). Os principais: `API_PORT=3000`, `DB_HOST`, `DB_PORT=5432`, `DB_DATABASE`, `DB_USER` e `DB_PASSWORD` (ou `DB_AUTH_MODE=iam`), `DB_SSLMODE` (o padrão é `verify-full`) e `DB_POOL_MAX`.
+
+Testes da aplicação, com Node 24:
 
 ```bash
 docker run --rm -v "$PWD/application:/src:ro" node:24.21.0-alpine3.24 sh -c \
   "cp -r /src /app && cd /app && npm ci && npm test && npm run lint && npm audit --omit=dev --audit-level=high"
 ```
 
-Os testes de integração (`npm run test:int`) precisam de um Postgres real com SCRAM e das variáveis `INTEGRATION_DB_*` ([`application/README.md`](application/README.md)). [FATO: a última execução registrada do conjunto foi em 13/10/2026, com 44 testes passando, 4 ignorados (integração, que rodou à parte) e `npm audit` sem achados. Este comando não foi reexecutado ao escrever este README porque o daemon do Docker estava desligado]
+O laboratório Kubernetes também roda localmente no kind: `tools/k8s-local-test.sh` faz 15 verificações, incluindo rolling restart sem falhas e HPA.
 
-### Terraform
-
-```bash
-terraform fmt -check -recursive infrastructure
-terraform -chdir=infrastructure init -backend=false -input=false -lockfile=readonly
-terraform -chdir=infrastructure validate
-terraform -chdir=infrastructure/bootstrap init -backend=false -input=false -lockfile=readonly
-terraform -chdir=infrastructure/bootstrap validate
-```
-
-Os módulos não têm lockfile próprio. Para rodar os testes (`.tftest.hcl`) de um módulo, copie o lockfile da raiz, inicialize e teste. O exemplo usa o módulo `security-group`; apague o lockfile copiado depois, para não sujar o `git status`:
-
-```bash
-cp infrastructure/.terraform.lock.hcl infrastructure/modules/security/security-group/
-terraform -chdir=infrastructure/modules/security/security-group init -backend=false -input=false -lockfile=readonly
-terraform -chdir=infrastructure/modules/security/security-group test
-rm infrastructure/modules/security/security-group/.terraform.lock.hcl
-```
-
-Os módulos com testes são `budget`, `ecr`, `ecs`, `oidc`, `security-group`, `route` e `subnet`. O CI roda `terraform test` em cada um. [FATO: [`ci.yml`](.github/workflows/ci.yml) linhas 155-180]
-
-Resultado deste turno (13/10/2026, Terraform local):
-
-- `terraform fmt -check -recursive infrastructure`: código de saída 0.
-- `terraform validate` nos dois roots (`infrastructure` e `infrastructure/bootstrap`): `Success! The configuration is valid.`
-- `terraform test` do módulo `security-group`: `Success! 10 passed, 0 failed.`
-
-O `terraform plan` não faz parte desta validação: os data sources `aws_availability_zones` e `aws_ecr_repository` exigem a AWS.
-
-### Scanners
-
-| Ferramenta | Alvo | Comando local |
-|---|---|---|
-| Gitleaks | histórico e arquivos | `gitleaks git . --no-banner --redact` e `gitleaks dir . --no-banner --redact` |
-| Semgrep | `application/` | ver o passo `sast` em [`ci.yml`](.github/workflows/ci.yml) (roda pela imagem oficial fixada por digest) |
-| Hadolint | Dockerfile | `hadolint application/Dockerfile` |
-| Trivy image | imagem construída | `trivy image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 <imagem>` |
-| Trivy config | Terraform | `trivy config infrastructure --ignorefile infrastructure/.trivyignore --severity HIGH,CRITICAL --exit-code 1` |
-| TFLint | Terraform | `tflint --recursive --chdir infrastructure --config infrastructure/.tflint.hcl` |
-| actionlint | workflows | `actionlint` |
-
-Exceções do Trivy ficam em [`infrastructure/.trivyignore`](infrastructure/.trivyignore), cada uma com justificativa e data. A exceção do Gitleaks está em [`.gitleaks.toml`](.gitleaks.toml).
-
-### Console do Windows (UTF-8)
-
-No Windows PowerShell 5.1 o console usa a página de código OEM, então a tabela do Trivy (bordas Unicode) aparece como `Ôö£ÔöÇ` e CLIs Python como o aws cli podem falhar com `'charmap' codec can't encode character`. Antes de rodar essas ferramentas, faça `. .\tools\console-utf8.ps1`: ele ajusta só a sessão atual (UTF-8 no console e `PYTHONUTF8=1`), sem tocar no perfil do usuário. [FATO: [`tools/console-utf8.ps1`](tools/console-utf8.ps1)]
-
-## Como o pipeline funciona
-
-Três workflows em [`.github/workflows/`](.github/workflows):
-
-| Workflow | Gatilho | Environment | Role AWS (OIDC) |
-|---|---|---|---|
-| [`ci.yml`](.github/workflows/ci.yml) | `pull_request` | nenhum | `gha-plan` (leitura), só no job `plan` e só para PR do mesmo repositório |
-| [`deploy.yml`](.github/workflows/deploy.yml) | push na `main` com mudança em `application/**`, ou `workflow_dispatch` com `only_build` | `deploy` | `gha-deploy` |
-| [`infra.yml`](.github/workflows/infra.yml) | `workflow_dispatch` com `plan`, `apply` ou `destroy`, a tag da imagem e, só para mudança destrutiva, `confirm_destructive=dev` | job `plan`: `infra-plan` (sem aprovação); job `apply`: `infra`, com aprovação manual | `gha-infra-plan` (leitura e grava o plano) no `plan`; `gha-infra` no `apply` |
-| [`eks-lab.yml`](.github/workflows/eks-lab.yml) | `workflow_dispatch` (`up`/`down`) e agendamento horário (destroy por TTL) | `eks-lab` (sem aprovação) | `gha-eks-lab` |
-
-- **Autenticação:** somente OIDC, sem access keys. Cada role aceita um `sub` exato, com o contexto `pull_request`, `environment:deploy`, `environment:infra-plan`, `environment:infra` ou `environment:eks-lab`. Um environment por contexto garante que um workflow não assume a role de outro ([ADR 0009](docs/adr/0009-pipeline-com-oidc-e-um-environment-por-workflow.md)).
-- **Imagem:** construída uma vez, com a tag igual ao SHA do commit, para `linux/amd64` e `linux/arm64`. As tags do ECR são imutáveis, então o push é pulado se a tag já existe. O scan (Trivy) e o deploy usam o digest gravado no ECR, sem rebuild. [FATO: [`deploy.yml`](.github/workflows/deploy.yml) linhas 54-137]
-- **Deploy:** renderiza a task definition ativa com a imagem nova, atualiza o service, espera estabilidade, roda o smoke test (`GET /` e `GET /connect` = 200) e, se algo falhar, volta o service para a revisão anterior. [FATO: [`deploy.yml`](.github/workflows/deploy.yml) linhas 146-214]
-- **Infra:** dois jobs, e a aprovação acontece **depois** do plano.
-  - Job `plan`: gera o plano, mostra no resumo do run quanto vai criar, alterar, destruir e substituir, e **lista o que será destruído ou substituído**.
-  - Plano destrutivo (algum `delete` ou `replace`) só segue com `confirm_destructive=dev`. Sem isso, o run para antes do gate.
-  - O plano fica no bucket de state com o SHA-256.
-  - Job `apply`: depois que você aprova o gate `infra`, baixa o plano, confere o hash e aplica exatamente ele.
-  - Nada de `terraform apply` em `ci.yml` ou `deploy.yml`.
-- **Actions** de terceiros fixadas por SHA de commit, com a tag em comentário.
-
-### Ordem do primeiro deploy
+### Na AWS
 
 ```mermaid
 flowchart LR
-    boot["1. bootstrap<br/>terraform local, state local"]
-    img["2. deploy.yml<br/>only_build = true"]
-    infra["3. infra.yml<br/>plan, aprovacao, apply"]
-    dep["4. deploy.yml<br/>deploys seguintes"]
-
-    boot --> img --> infra --> dep
+    boot["1. bootstrap<br/>terraform local"] --> img["2. deploy.yml<br/>only_build = true"] --> infra["3. infra.yml apply<br/>plan, aprovação, apply"] --> init["4. tools/run-db-init.sh"] --> dep["5. deploys seguintes<br/>push na main"]
 ```
 
-1. **Bootstrap** ([`infrastructure/bootstrap`](infrastructure/bootstrap/main.tf)): aplicado uma vez, localmente, com aprovação e um perfil de escrita. Cria o bucket de state, o ECR, o budget e o OIDC com as roles. O state local é sensível: nunca versionar nem abrir. Exemplo de variáveis em [`terraform.tfvars.example`](infrastructure/bootstrap/terraform.tfvars.example), com `<GITHUB_OWNER>` e `<EMAIL>` como placeholders.
-2. **GitHub:** criar os environments `deploy`, `infra` e `infra-plan` (e `eks-lab` para o lab), todos só com a branch `main` e com aprovação obrigatória só no `infra`. Variáveis do repositório: `AWS_PLAN_ROLE_ARN`, `AWS_DEPLOY_ROLE_ARN`, `AWS_INFRA_ROLE_ARN`, `TF_STATE_BUCKET`, `TF_STATE_KEY` e `AWS_REGION`. No environment `infra-plan`, o secret `AWS_INFRA_PLAN_ROLE_ARN`. `API_URL` (saída `api_endpoint` da stack) só é necessária depois do passo 3, para o smoke test.
-3. **Primeira imagem:** `deploy.yml` com `only_build = true` publica a imagem no ECR sem tocar no ECS. Sem ela a task não sobe.
-4. **Stack:** `infra.yml` com `action = apply` e a tag dessa imagem.
-5. **Deploys seguintes:** a cada push em `application/**` na `main`. Se o service ainda não existe, o deploy falha com uma mensagem pedindo o `infra.yml`. [FATO: [`deploy.yml`](.github/workflows/deploy.yml) linhas 152-156]
+1. **Bootstrap** ([`infrastructure/bootstrap`](infrastructure/bootstrap/main.tf)): aplicado uma vez, localmente. Cria o bucket de state, o ECR, o budget, o OIDC e as roles da pipeline. O state local é sensível e nunca é versionado.
+2. **GitHub:** environments `deploy`, `infra` (com aprovação), `infra-plan` e `eks-lab`, todos só com a branch `main`. Variáveis e secrets com as saídas do bootstrap, como lista o [`infrastructure/README.md`](infrastructure/README.md).
+3. **Primeira imagem:** `deploy.yml` com `only_build = true`.
+4. **Stack:** `infra.yml` com `action = apply` e a tag da imagem. Leia o resumo do job `plan` e aprove o gate `infra`.
+5. **Usuário do banco:** `tools/run-db-init.sh dev`, uma vez, para criar o `app_connect` só com `CONNECT`.
+6. **Smoke:** `GET /`, `/health` e `/connect` no endpoint do API Gateway, que é a saída `api_endpoint` e vai para a variável `API_URL`.
+7. **Destruir:** `infra.yml` com `action = destroy` e `confirm_destructive = dev`, e depois `tools/residual-check.sh`.
 
-O service ignora mudanças em `task_definition` e `desired_count`. O Terraform cria a primeira revisão, o pipeline publica as seguintes e o autoscaling controla a contagem. Consequência: mudar variável de ambiente, CPU ou memória pelo Terraform não chega ao service sem um deploy pelo pipeline. Detalhes em [`infrastructure/README.md`](infrastructure/README.md) linhas 45-50.
+## 12. Estrutura do repositório e documentação
 
-## Estimativa de custo
-
-Só entram números da tabela de preços de [`02-finops-guardrails.md`](.kiro/steering/02-finops-guardrails.md) (região us-east-1). O que não tem fonte lá aparece como **a verificar**. Cálculos mensais usam 730 horas por mês, uma convenção de cálculo.
-
-| Item | Preço de referência | Mensal em 24x7 | Fonte |
-|---|---|---|---|
-| Fargate ARM64, 1 task de 0,5 vCPU e 1 GB | US$ 0,03238/vCPU-h e US$ 0,00356/GB-h, ou US$ 0,01975/h | US$ 14,42 (cálculo) | aws.amazon.com/fargate/pricing |
-| IPv4 público, 1 por task | US$ 0,005/h | US$ 3,65 por IP (cálculo) | aws.amazon.com/vpc/pricing |
-| API Gateway HTTP API | US$ 1,00 por milhão de requisições (primeiros 300 milhões) | Depende do volume | aws.amazon.com/api-gateway/pricing |
-| Cloud Map | US$ 0,10 por recurso registrado/mês e US$ 1,00 por milhão de chamadas de descoberta | Medido em 13/10: 72.921 chamadas para 1.078.187 requisições do API Gateway, ~1 por 15 requisições (ver [`docs/plano/05-custo-real.md`](docs/plano/05-custo-real.md)) | aws.amazon.com/cloud-map/pricing |
-| Zona privada do Route 53 | US$ 0,50/mês | US$ 0,50 | tabela da steering |
-| RDS `db.t4g.micro` on-demand | US$ 0,0160/h (**medido** na fatura: 10,5 h em 14 e 15/10) | ~US$ 11,68 (cálculo) | Cost Explorer, 15/10/2026 |
-| AWS Budgets sem ações | Gratuito | US$ 0 | aws.amazon.com/aws-cost-management/aws-budgets/pricing |
-| NAT Gateway (não usado) | US$ 0,045/h e US$ 0,045/GB (exemplo de Ohio) | US$ 32,85 (cálculo) | aws.amazon.com/vpc/pricing |
-| EKS control plane (só no lab) | US$ 0,10/h em suporte padrão (medido: 4,43 h = US$ 0,44) | Lab: os nós `t4g.small` saíram a US$ 0 (Free Tier); real da janela 3: US$ 0,52 só nas linhas do lab | aws.amazon.com/eks/pricing e Cost Explorer |
-
-- **Estimativa da steering para a stack ECS em 24x7:** cerca de US$ 34/mês (RDS ~14, task ~14,42, IPv4 3,65 e o resto ~2). O planejado é cerca de US$ 41 de crédito, com meta de no máximo US$ 45, dentro de US$ 100 de crédito. [FATO: [`02-finops-guardrails.md`](.kiro/steering/02-finops-guardrails.md) seção "Orçamento e estimativas"] Esses totais são estimativa, não medição, e a decomposição do planejado de US$ 41 não está registrada.
-- **A verificar:** VPC Link V2, CloudWatch Logs (retenção de 14 dias, `[PROPOSTA]`), Secrets Manager (segredo gerenciado pelo RDS), ECR (armazenamento), S3 do state, storage gp3 de 20 GiB do RDS (`[PROPOSTA]`), tráfego de saída, preço exato do RDS e o ALB que a stack não usa.
-- Cada task adicional do autoscaling custa o Fargate mais um IPv4 (US$ 0,02475/h, cálculo). Ver [`docs/autoscaling.md`](docs/autoscaling.md).
-- (Medido em 13/10) A hipótese da steering era que o API Gateway chamasse `DiscoverInstances` a cada requisição, dobrando o custo por requisição. Não aconteceu: foi ~1 chamada do Cloud Map por 15 requisições, +6,8% ([`docs/plano/05-custo-real.md`](docs/plano/05-custo-real.md)).
-
-## FinOps
-
-- **Budget mensal de US$ 45 sem créditos.** O módulo de budget fixa `include_credit = false` (o padrão do provider é `true`, e com créditos incluídos o custo líquido fica zerado e nenhum alerta dispara). Os alertas são de gasto **real**, em US$ 5 (anomalia cedo), 50%, 80% e 100%. Não há alerta de previsão, porque a AWS precisa de cerca de 5 semanas de histórico. O budget nasce no bootstrap, antes da stack. [FATO: [`modules/budget/main.tf`](infrastructure/modules/budget/main.tf) linhas 1-23]
-- **Budget não é disjuntor.** O billing atualiza pelo menos uma vez por dia. Quem corta gasto é o `destroy` e o TTL.
-- **TTL e tags.** Todo recurso leva `Project`, `Env`, `Track`, `Owner`, `ManagedBy` e `TTL` por `default_tags`. O `TTL` vem de `var.ttl` (padrão `none`). Os recursos do bootstrap levam `Track=bootstrap` e são ignorados pela varredura de resíduos. [FATO: [`infrastructure/providers.tf`](infrastructure/providers.tf) e [`infrastructure/bootstrap/providers.tf`](infrastructure/bootstrap/providers.tf)]
-- **A stack roda só durante a janela de avaliação** e depois é destruída: `infra.yml` com `action = destroy` (com aprovação). O bootstrap (bucket, ECR, budget, OIDC) permanece.
-- **Depois do destroy, rodar [`tools/residual-check.sh`](tools/residual-check.sh).** A varredura é somente leitura. Código 0 é limpo, 1 indica recursos que podem continuar cobrando e 2 é erro de consulta, que **não** significa limpo. Destroy sem varredura é tarefa incompleta. As revisões da task definition continuam registradas depois do destroy (`skip_destroy = true`) e o script não as lista. [FATO: [`infrastructure/README.md`](infrastructure/README.md) linha 50]
-- **Antes de qualquer recurso na AWS:** custo por hora e por mês com fonte, o que continua cobrando depois do destroy, por quanto tempo fica ligado e se o serviço é aceito no plano da conta. Sem isso e sem aprovação explícita, nada é criado. [FATO: [`02-finops-guardrails.md`](.kiro/steering/02-finops-guardrails.md) e regra 7 de [`AGENTS.md`](AGENTS.md)]
-
-## Documentação
+```
+simple-api/
+├── application/        # API Node.js (Express + pg), Dockerfile e testes
+├── infrastructure/     # Terraform: bootstrap/, raiz da stack, eks-lab/, modules/, environments/, config/
+├── k8s/                # Kustomize: base e overlays local (kind) e eks
+├── .github/workflows/  # ci.yml, deploy.yml, infra.yml, eks-lab.yml, eks-lab-watchdog.yml
+├── docs/               # arquitetura, ADRs, autoscaling, DR, desempenho, planos, verificações
+├── tests/              # cargas k6 (local e AWS), resultados e medições do Kubernetes
+└── tools/              # residual-check, run-db-init, plan-guard, k8s-local-test (com testes)
+```
 
 | Documento | Conteúdo |
 |---|---|
-| [`docs/arquitetura.md`](docs/arquitetura.md) | Diagramas, security groups, portas, subnets e fluxo internet até o banco |
-| [`docs/autoscaling.md`](docs/autoscaling.md) | Métrica, alvo, min e max, cooldowns, roteamento, conexões com o banco |
-| [`docs/dr.md`](docs/dr.md) | RPO e RTO, restore PITR, recriação em outra região ou conta |
-| [`docs/performance/benchmark-local.md`](docs/performance/benchmark-local.md) | Resumo dos CSV do benchmark LOCAL, conferido com a steering |
-| [`docs/performance/benchmark-aws.md`](docs/performance/benchmark-aws.md) | Carga na AWS (API Gateway e dentro da VPC), rotulada AWS, com ressalvas |
-| [`docs/plano/`](docs/plano/00-plano-execucao.md) | Plano de execução, auditoria de IAM da `gha-infra`, FinOps do apply e desenho da carga na VPC |
-| [`docs/verificacoes/`](docs/verificacoes/2026-10-13-estado-final.md) | Verificação das afirmações dos docs contra dados e estado real: [13/10](docs/verificacoes/2026-10-13-estado-final.md) e [janela 2 (14/10)](docs/verificacoes/2026-10-14-janela-2.md) |
-| [`docs/eks-lab.md`](docs/eks-lab.md) | Runbook do laboratório EKS: teste local no kind, como subir e descer, e o que costuma precisar de ajuste |
-| [`docs/adr/`](docs/adr/README.md) | Decisões de arquitetura |
-| [`docs/KIRO-SETUP.md`](docs/KIRO-SETUP.md) | Pacote de guardrails de agentes de IA |
-| [`AGENTS.md`](AGENTS.md) | Contrato de trabalho e regras anti-alucinação |
+| [`docs/arquitetura.md`](docs/arquitetura.md) | Rede, subnets, rotas, security groups e fluxo, lidos do código |
+| [`docs/adr/`](docs/adr/README.md) | As 14 decisões de arquitetura, com alternativas e consequências |
+| [`docs/autoscaling.md`](docs/autoscaling.md) | Plano de autoscaling e o spike medido |
+| [`docs/dr.md`](docs/dr.md) | Plano de DR, RPO e RTO, e os dois restores executados |
+| [`docs/performance/benchmark-aws.md`](docs/performance/benchmark-aws.md) | Carga, soak e efeito do IAM no RDS, na AWS |
+| [`docs/eks-lab.md`](docs/eks-lab.md) | Runbook do laboratório EKS |
+| [`docs/usuario-db-iam.md`](docs/usuario-db-iam.md) | Usuário do banco só com `CONNECT`, via IAM |
+| [`docs/plano/`](docs/plano/00-plano-execucao.md) | Planos de cada janela de AWS, com FinOps e custo real |
+| [`docs/verificacoes/`](docs/verificacoes) | Conferência das afirmações dos docs contra dados e estado real |
+| [`docs/historico.md`](docs/historico.md) | Diário detalhado das janelas: o que funcionou, o que falhou e como foi corrigido |
 
-## Pendências
+## 13. O que ficou pendente
 
-Estado em 14/10/2026 (fim da janela 3): a stack foi criada na AWS três vezes (13/10 e duas vezes em 14/10), testada e **destruída** em todas (o bootstrap permanece). Na janela 3 o laboratório EKS foi aplicado e validado ([ADR 0014](docs/adr/0014-lab-eks-com-argo-cd-core-e-nlb-interno.md), [`docs/plano/07-janela-3-eks.md`](docs/plano/07-janela-3-eks.md)). Resultados em [`docs/performance/benchmark-aws.md`](docs/performance/benchmark-aws.md) e no plano de execução em [`docs/plano/`](docs/plano/00-plano-execucao.md)). Abaixo, o que foi verificado e o que continua sem verificação.
+O desafio pede para documentar o que faltou e como seria resolvido.
 
-**Verificado na AWS**
-- Bootstrap aplicado (state local, nunca versionado): bucket de state, ECR, budget, provedor OIDC, roles `gha-plan`, `gha-deploy` e `gha-infra` e o Resource Group `kxc-simple-api-RG` (por tag `Project`). GitHub configurado: environments `deploy` e `infra` (com aprovação) e variáveis do repositório.
-- Apply da stack pelo `infra.yml` em duas rodadas (plan de 50 recursos). A primeira falhou parcialmente por permissões da `gha-infra` (`ecr:DescribeImages`, `apigateway:TagResource`, `route53:CreateHostedZone` e leituras do Route 53, `rds:ListTagsForResource`); cada falta foi corrigida em `modules/oidc/main.tf` com o motivo em comentário (least privilege iterativo) e o bootstrap reaplicado. A segunda rodada concluiu (17 recursos criados, sem novo AccessDenied).
-- O Free plan desta conta recusa `backup_retention_period = 7` (`FreeTierRestrictionError`): o `dev` usa 1, ou seja, **PITR de 1 dia** (o alvo documentado é 7).
-- Pelo API Gateway, `GET /`, `/health` e `/connect` respondem 200. O RDS é PostgreSQL 16.13 e o `max_connections` do `db.t4g.micro` é 79 (medido). O TLS `verify-full` e a leitura do segredo gerenciado pelo RDS funcionam (o `/connect` conecta). A imagem arm64 roda no Fargate.
-- `deploy.yml` de ponta a ponta: build multi-arch, Trivy nos dois digests, SBOM, deploy por digest no ECS e smoke do pipeline (run 38461659742).
-- **Laboratório EKS (janela 3, 14/10):**
-  - O lab sobe e desce pelo `eks-lab.yml`.
-  - `/eks/connect` responde 200 por IAM via Pod Identity, sem segredo no cluster, no mesmo API Gateway do ECS.
-  - O Argo CD core aplica a `main` e desfaz deriva, e o HPA escala com CPU.
-  - Rolling restart com tráfego: 0 falhas em 596 e 1 em 788.
-  - O RDS aguentou os dois clientes IAM.
-  - Foram 8 correções, com destaque para:
-    - o metrics-server v0.9.0 corrompia o `/openapi/v2`;
-    - o NLB precisou de cross-zone e de readiness gate;
-    - a `gha-eks-lab` precisou de três permissões a mais.
-  - Dados em [`tests/k8s/2026-10-14-eks-janela-3-resultado.txt`](tests/k8s/2026-10-14-eks-janela-3-resultado.txt).
-  - Destroy às 22:14 de Brasília (run 38664023276, 54 destroyed). O `residual-check` saiu com exit 1 só pelo atraso do índice de tags: as 10 regras de SG listadas já estavam `NotFound`.
-- **Janela curta do lab EKS (15/10, 10:10 a ~11:50):**
-  - **Vigia do TTL validado:** o lab foi destruído sozinho pelo `gc` 2 min depois do TTL. O cron do GitHub, que deveria ser horário, rodou só 3 vezes em ~17 h, e agora é só a segunda rede.
-  - **Smoke:** o prazo passou a 6 min, porque um NLB recém-criado levou ~4 min para responder.
-  - **Falhas no rolling restart:** a causa ficou medida em 0,30%, no SIGTERM do pod antigo, por uma corrida de keep-alive. A correção está proposta no [ADR 0014](docs/adr/0014-lab-eks-com-argo-cd-core-e-nlb-interno.md) e ainda não foi implementada.
-- Carga na AWS, rotulada AWS e separada da LOCAL: pelo API Gateway (smoke e baseline a 40 req/s) e dentro da VPC (load até 500, stress até 1.000 e rampa até 1.500 req/s, sem erro; o breakpoint não foi atingido). Detalhes, ressalvas e dados em `tests/load/results/`.
+| Pendência | Como resolver |
+|---|---|
+| RDS single-AZ com 1 dia de backup | 7 dias é parâmetro do `tfvars`, barrado só pelo Free plan desta conta; Multi-AZ exige expor `multi_az` como variável no módulo do RDS |
+| A task única satura por ~5 min num spike antes de escalar | Mínimo de 2 tasks, ou target tracking por requisições |
+| Saída das tasks em 443 e 53 para `0.0.0.0/0` | VPC endpoints de interface para ECR, Logs e STS (custo por hora a avaliar) |
+| API pública sem autenticação (contrato do desafio) | Authorizer no API Gateway, se a API deixar de ser aberta |
+| Restore em outra região e em outra conta não testados | Cópia de snapshot entre regiões e o mesmo caminho de recriação da seção 5 |
+| Rotação real do segredo master e IAM Access Analyzer não exercitados | Forçar uma rotação numa janela; rodar o Access Analyzer nas policies |
+| Throttling de CPU do Fargate não medido | Métricas do Container Insights numa janela de carga |
+| Lab EKS: um apply da stack com o lab no ar remove as tags `kubernetes.io/` das subnets; repetir o `up` derruba as rotas `/eks` por alguns segundos | `ignore_tags` com o prefixo `kubernetes.io/` no provider da stack; manter `enable_api_route` na etapa 1 quando o lab já estiver no ar |
+| A drenagem por SIGUSR2 (`Connection: close`) não provou ganho próprio no EKS | Medir o `preStop` de 40 s sem ela; manter só o que tiver efeito medido |
 
-**Ainda não verificado**
-- (Resolvido em 14 e 15/10) **Custo real das três janelas**, todo coberto por crédito:
-  - 13/10: US$ 1,48 bruto;
-  - 14/10: US$ 1,28, com as janelas 2 e 3;
-  - 15/10 até 09:35: US$ 0,21 (parcial).
-
-  A janela 3 custou ~US$ 0,75 a 0,80 contra US$ 0,90 a 1,00 estimados, porque os nós do EKS saíram de graça pelo Free Tier. O saldo de crédito está em **US$ 157,03**; subiu ~US$ 20 por um crédito extra do Free plan, cujo motivo não foi conferido.
-- Janela 1 em 13/10: o Cloud Map cobra por chamada de API, mas foram ~1 chamada por 15 requisições do API Gateway (+6,8% sobre o custo do API Gateway), não uma por requisição; o mecanismo (cache) não foi verificado. Ver [`docs/plano/05-custo-real.md`](docs/plano/05-custo-real.md).
-- Autoscaling: medido em um spike (100 → 1.500 req/s pelo API Gateway): decisão de scale-out ~5 min depois do salto, task nova rodando ~44 s depois da decisão, 3 tasks em ~8,7 min e volta a 1 task ~22 min depois do fim do spike. Uma execução só; durante a saturação o p95 chegou a 290 ms e o erro a 0,17% num minuto ([`docs/autoscaling.md`](docs/autoscaling.md), [`docs/performance/benchmark-aws.md`](docs/performance/benchmark-aws.md)).
-- Throttling de CPU do Fargate não medido. Soak de 2 h (600 req/s, 0% de erro, sem deriva) e 3 séries por perfil (task nova da API em cada) foram feitos em 14/10; a variação entre tasks foi grande (CPU a 500 req/s: 33%, 42% e 56%), então uma série não vale como capacidade ([`docs/performance/benchmark-aws.md`](docs/performance/benchmark-aws.md)). O spike foi feito com o throttling do estágio elevado temporariamente (restaurado em 50/100).
-- Rotação de 7 dias do segredo: a app invalida o cache em `28P01` (testado com cliente falso), mas uma rotação real não foi exercitada.
-- Conectividade das tasks até ECR, CloudWatch Logs e Secrets Manager por IP público, sem NAT nem endpoints: funcionou nos testes, sem análise de falhas.
-- **Destroy executado** pelo `infra.yml` (run 38486943440: 0 to add, 0 to change, 50 to destroy; gate `infra` aprovado). Conferência com `tools/residual-check.sh`: na noite do destroy o script saiu com **exit 1**, porque a seção por tag listava itens já removidos (índice de tags com atraso: as 7 regras de SG e o service sumiram do índice em ~12 h) e artefatos de ECS que a AWS nunca remove (cluster `INACTIVE` e task definitions). Em 14/10 o script passou a **classificar o ECS pelo status real** (cluster ou service ativo, ou não classificável, é resíduo; `INACTIVE` é ignorado; task definition `ACTIVE` só é informada), com teste em `tools/test-residual-check.sh` (12 casos, validado por teste de mutação), e a varredura saiu com **exit 0** (só o aviso esperado do GuardDuty). As task definitions `simple-api-dev:1` e `:2` ficam `ACTIVE` por `skip_destroy = true` (sem custo). **Janela 2 (14/10):** destroy em 15:43 de Brasília (run 38614733505, 54 destroyed); o script saiu de novo com **exit 1**, desta vez só por 7 regras de SG que o índice de tags ainda listava e que a API EC2 já não encontra (`NotFound`, conferido uma a uma); não há VPC, SG, RDS nem cluster ativo do projeto, e a seção de ECS foi classificada corretamente. O exit 0 depende de o índice de tags atualizar (na janela 1 levou menos de ~12 h). **15/10, 09:32:** depois da janela 3 e do teste do `infra.yml`, o script saiu com **exit 0** (só o aviso do GuardDuty), menos de ~9,5 h depois do último destroy.
-
-**Build, testes e CI**
-- Build `linux/arm64` verificado no CI (PR #1) e no `deploy.yml`. O build arm64 local não é possível (o builder do Docker Desktop não tem QEMU). Não foi verificado se `TRIVY_PLATFORM` chega ao scan arm64 do `deploy.yml`.
-- Os testes da app citados vêm da última execução registrada (48 testes: 44 passam, 4 de integração ignorados, 0 falham).
-- O `ci.yml` só roda em `pull_request`. Desde 14/10 toda mudança passa por um PR de validação no fork, fechado sem merge, antes do merge local na `main`. Os PRs #13 a #22 ficaram todos verdes, exceto o `dockerfile` dos PRs #18 a #21, que falhou pela troca do bundle de CAs do RDS (corrigida no #22). O teste do módulo `oidc` foi corrigido, e o `plan` do CI passa.
-
-**Desempenho**
-- O benchmark local não foi repetido com a imagem final (`--cpus=0.5`, `DB_POOL_MAX=3`) e a compatibilidade do `load.js` local com k6 2.x não foi conferida. Números LOCAIS e AWS não se misturam.
-
-**Segurança**
-- A API é pública e sem autenticação (contrato do desafio).
-- Usuário do banco só com `CONNECT`: **implementado e validado na AWS em 14/10/2026** (autenticação IAM do RDS, [ADR 0013](docs/adr/0013-usuario-da-app-so-connect-via-iam.md), runbook em [`docs/usuario-db-iam.md`](docs/usuario-db-iam.md)): a role da API não lê o segredo master e, como `app_connect`, criar objetos ou virar master é negado. **Custo medido:** a autenticação IAM usa ~117 MiB de RAM e ~150 MiB de swap no `db.t4g.micro` (confirmado por A/B na mesma instância); 2 h de soak a 600 req/s com 0% de erro. Margem de memória fina; **decisão do Leandro (14/10): manter o IAM no `db.t4g.micro`** (ADR 0013). A app pré-aquece o token e a primeira conexão na partida, como mitigação do 503 da primeira conexão fria. Medido na AWS em 14/10: depois de um restart, o primeiro `/connect` deu 200 em 0,84 s; antes dava 503 em 2 s. Na primeiríssima partida, antes do `db-init`, o pré-aquecimento só registra o `28P01` e a app continua no ar. O `dev.tfvars` está em `db_iam_auth = true`; com `false` volta ao modo anterior (master).
-- A role `gha-infra` cria roles e policies com prefixo `simple-api-*` com conteúdo livre (escalada dentro do prefixo). O IAM Access Analyzer não foi usado para validar as policies.
-- (Resolvido em 14/10) O `infra.yml` tinha um job só, e a aprovação vinha antes de o plan ser visto. Hoje tem dois jobs (plan, depois gate e apply do plano revisado) e exige `confirm_destructive` em mudança destrutiva ([ADR 0009](docs/adr/0009-pipeline-com-oidc-e-um-environment-por-workflow.md)). Validado de ponta a ponta em 14/10 com a stack real:
-  - apply: 54 added, hash conferido;
-  - destroy sem confirmação: parou antes do gate (`delete=54`);
-  - destroy confirmado: 54 destroyed.
-- O `trivy-action` roda no job do `deploy.yml` que tem credenciais AWS temporárias, e o job `plan` do `ci.yml` executa HCL do próprio PR com a role de leitura.
-- A saída das tasks em 443 e 53 para `0.0.0.0/0` é necessária sem NAT, mas é ampla.
-- O SHA-256 do CA bundle da RDS é fixado por TOFU (a AWS não publica checksum). Em 14/10 a AWS trocou o arquivo e o build falhou como projetado. Conferi certificado a certificado: passou de 111 para 114, entraram só as 3 raízes da região sa-west-1 e nenhuma saiu. Depois disso atualizei o hash (PR #22).
-- O repositório é público e o account id aparece nos logs das Actions (via OIDC): considerar torná-lo privado ao final.
-- O hook local do gitleaks existe em [`.pre-commit-config.yaml`](.pre-commit-config.yaml) (mesma versão do CI, 8.30.1; instalar com `pip install pre-commit && pre-commit install`). Validado em 14/10/2026: bloqueia um segredo falso no stage (`github-pat`, exit 1) e passa sem nada staged. Ele só olha o que está staged; o histórico completo continua sendo coberto pelo `gitleaks git` do CI.
-
-**DR**
-- Um restore PITR real foi testado (13/10/2026): pedido até instância `available` em 15,4 min e marcador verificado em 16,4 min; RPO observado de ~3 a 8 min (uma execução, banco quase vazio). Em 14/10 repeti com a troca do endpoint e da policy IAM: restore 15,9 min + policy 4 s + troca 2,6 min = **18,5 min** até a app responder na instância restaurada (um piso: faltam a decisão e o `terraform apply`/`import`, não medidos); cópia entre regiões e snapshot entre contas não foram testados.
-- Com a configuração atual de `dev`, o `destroy` apaga os dados e os backups automáticos ([`docs/dr.md`](docs/dr.md)).
-- Replicação entre regiões e snapshot entre contas: só documentados, por escopo e por custo.
-
-**Não implementado**
-- Laboratório EKS: **implementado e validado só localmente e em CI, nunca aplicado na AWS** ([ADR 0007](docs/adr/0007-eks-somente-como-laboratorio-efemero.md), [ADR 0014](docs/adr/0014-lab-eks-com-argo-cd-core-e-nlb-interno.md), runbook em [`docs/eks-lab.md`](docs/eks-lab.md)): manifests Kustomize em `k8s/` testados no kind (15 de 15, incluindo 3 rolling restarts sem requisição falhada; o teste achou a falta de um `preStop`), root `infrastructure/eks-lab` com `terraform validate` e 9 testes, role `gha-eks-lab` e o workflow `eks-lab.yml`. O Argo CD observa a `main` (não a branch `gitops` da steering, por causa do account id; desvio registrado no ADR). Falta a janela de AWS: o formato do `overwrite:path`, a regra do VPC Link até o NLB e as permissões da `gha-eks-lab` só se validam lá.
-- Notificação dos alarmes: o código cria três alarmes (crédito de CPU do RDS, espaço livre e respostas 5xx da API), mas `alarm_action_arns` é vazio por padrão, então nenhum alarme avisa ninguém.
-- Rotina de atualização do digest da imagem e das dependências (Dependabot ou Renovate): não decidida.
-
-**Valores `[PROPOSTA] a calibrar` no `dev.tfvars`:** throttling do estágio (50 req/s e burst 100; limita os testes pelo API Gateway), storage do RDS (20 GiB), retenção de logs (14 dias), TTL do registro SRV (10 s) e os limiares dos três alarmes.
-
-**Divergências entre a steering e o código** (vale o código; nada foi alterado para bater com a documentação):
-- A steering fala numa flag `ingress_mode = "alb"` que não existe no código.
-- A estimativa da steering para 3 tasks via API Gateway assume throttling de 1.000 req/s no estágio; o `dev.tfvars` define 50.
-- A estimativa de 500 req/s por task de 0,5 vCPU era conservadora: dentro da VPC a task sustentou 1.000 req/s sem erro.
+O histórico completo de cada janela está em [`docs/historico.md`](docs/historico.md).

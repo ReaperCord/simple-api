@@ -69,4 +69,15 @@ curl -sk -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $TOKEN" \
 | Permissão faltando na `gha-eks-lab` | `AccessDenied` no apply | `infrastructure/modules/oidc/main.tf` (policies `eks_lab` e `eks_lab_iam`); antes de corrigir, confirmar com `aws iam simulate-principal-policy` e, para data sources, com `TF_LOG=DEBUG` (lista as chamadas reais) |
 | Memória dos nós | pods `Pending` ou reiniciando | `node_instance_type` (`t4g.small` tem 2 GiB; medido 49% e 65% com tudo no ar) |
 | Pod sem banco | `CreateContainerConfigError` | o ConfigMap `simple-api-db` (criado pelo workflow) |
-| Falhas no rolling restart (0,30%) | 503 ou timeout no SIGTERM do pod antigo: corrida de keep-alive entre o VPC Link e a app, com fluxos presos ao alvo `draining` (medido em 15/10, [`tests/k8s/2026-10-15-eks-rolling-restart-keepalive.txt`](../tests/k8s/2026-10-15-eks-rolling-restart-keepalive.txt)) | proposto, não implementado: drenagem com `Connection: close` disparada no `preStop` (SIGUSR2) ([ADR 0014](adr/0014-lab-eks-com-argo-cd-core-e-nlb-interno.md)) |
+| Falhas no rolling restart (0,28% a 0,30%) no SIGTERM do pod antigo | O NLB segue mandando fluxos novos ao alvo `draining` por mais de 8 s | **Corrigido:** `preStop` de 40 s e grace de 60 s no overlay do EKS; 0 falhas em 2.081 ([dados](../tests/k8s/2026-10-15-eks-drenagem-e-prestop40.txt)) |
+
+## Dashboard do Argo CD
+
+O lab usa só os componentes core do Argo CD, sem o `argocd-server`. A interface roda na máquina de quem opera, com o acesso dela ao cluster, sem instalar nada no cluster e sem expor nada:
+
+```bash
+aws eks update-kubeconfig --name simple-api-dev-eks
+argocd admin dashboard -n argocd --port 8080   # abre em http://localhost:8080
+```
+
+Use o CLI da mesma versão do cluster (v3.5.5) e confira o checksum do release (`cli_checksums.txt`). Dá para ver o Application `simple-api`, a árvore de recursos, o estado de sync e de saúde e o histórico de revisões. Sync e delete funcionam pela interface, então use com cuidado.
