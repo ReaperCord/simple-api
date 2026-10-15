@@ -5,8 +5,17 @@ metadata:
 spec:
   template:
     spec:
+      # O NLB continua mandando fluxos NOVOS ao alvo `draining` por mais de 8 s depois da desregistracao: medido em
+      # 15/10/2026, com cross-zone e readiness gate, as falhas do rolling restart (0,28 a 0,30%) caiam em volta do
+      # SIGTERM, inclusive com a drenagem (Connection: close) ligada. Aqui o pod antigo segue aceitando e atendendo
+      # por 40 s depois de sair do target group. Grace period cobre preStop + encerramento da app (ate 8 s).
+      terminationGracePeriodSeconds: 60
       containers:
         - name: simple-api
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "kill -USR2 1; sleep 40"]
           # DB_HOST, DB_PORT, DB_DATABASE e DB_USER vem do ConfigMap `simple-api-db` (criado pelo workflow).
           envFrom:
             - configMapRef:
