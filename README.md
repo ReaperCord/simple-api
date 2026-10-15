@@ -280,7 +280,7 @@ Só entram números da tabela de preços de [`02-finops-guardrails.md`](.kiro/st
 
 ## Pendências
 
-Estado em 14/10/2026 (fim da janela 2): a stack foi criada na AWS duas vezes (13 e 14/10), testada e **destruída** nas duas (o bootstrap permanece). Resultados em [`docs/performance/benchmark-aws.md`](docs/performance/benchmark-aws.md) e no plano de execução em [`docs/plano/`](docs/plano/00-plano-execucao.md)). Abaixo, o que foi verificado e o que continua sem verificação.
+Estado em 14/10/2026 (fim da janela 3): a stack foi criada na AWS três vezes (13/10 e duas vezes em 14/10), testada e **destruída** em todas (o bootstrap permanece). Na janela 3 o laboratório EKS foi aplicado e validado ([ADR 0014](docs/adr/0014-lab-eks-com-argo-cd-core-e-nlb-interno.md), [`docs/plano/07-janela-3-eks.md`](docs/plano/07-janela-3-eks.md)). Resultados em [`docs/performance/benchmark-aws.md`](docs/performance/benchmark-aws.md) e no plano de execução em [`docs/plano/`](docs/plano/00-plano-execucao.md)). Abaixo, o que foi verificado e o que continua sem verificação.
 
 **Verificado na AWS**
 - Bootstrap aplicado (state local, nunca versionado): bucket de state, ECR, budget, provedor OIDC, roles `gha-plan`, `gha-deploy` e `gha-infra` e o Resource Group `kxc-simple-api-RG` (por tag `Project`). GitHub configurado: environments `deploy` e `infra` (com aprovação) e variáveis do repositório.
@@ -288,6 +288,18 @@ Estado em 14/10/2026 (fim da janela 2): a stack foi criada na AWS duas vezes (13
 - O Free plan desta conta recusa `backup_retention_period = 7` (`FreeTierRestrictionError`): o `dev` usa 1, ou seja, **PITR de 1 dia** (o alvo documentado é 7).
 - Pelo API Gateway, `GET /`, `/health` e `/connect` respondem 200. O RDS é PostgreSQL 16.13 e o `max_connections` do `db.t4g.micro` é 79 (medido). O TLS `verify-full` e a leitura do segredo gerenciado pelo RDS funcionam (o `/connect` conecta). A imagem arm64 roda no Fargate.
 - `deploy.yml` de ponta a ponta: build multi-arch, Trivy nos dois digests, SBOM, deploy por digest no ECS e smoke do pipeline (run 38461659742).
+- **Laboratório EKS (janela 3, 14/10):**
+  - O lab sobe e desce pelo `eks-lab.yml`.
+  - `/eks/connect` responde 200 por IAM via Pod Identity, sem segredo no cluster, no mesmo API Gateway do ECS.
+  - O Argo CD core aplica a `main` e desfaz deriva, e o HPA escala com CPU.
+  - Rolling restart com tráfego: 0 falhas em 596 e 1 em 788.
+  - O RDS aguentou os dois clientes IAM.
+  - Foram 8 correções, com destaque para:
+    - o metrics-server v0.9.0 corrompia o `/openapi/v2`;
+    - o NLB precisou de cross-zone e de readiness gate;
+    - a `gha-eks-lab` precisou de três permissões a mais.
+  - Dados em [`tests/k8s/2026-10-14-eks-janela-3-resultado.txt`](tests/k8s/2026-10-14-eks-janela-3-resultado.txt).
+  - Destroy às 22:14 de Brasília (run 38664023276, 54 destroyed). O `residual-check` saiu com exit 1 só pelo atraso do índice de tags: as 10 regras de SG listadas já estavam `NotFound`.
 - Carga na AWS, rotulada AWS e separada da LOCAL: pelo API Gateway (smoke e baseline a 40 req/s) e dentro da VPC (load até 500, stress até 1.000 e rampa até 1.500 req/s, sem erro; o breakpoint não foi atingido). Detalhes, ressalvas e dados em `tests/load/results/`.
 
 **Ainda não verificado**
@@ -301,19 +313,19 @@ Estado em 14/10/2026 (fim da janela 2): a stack foi criada na AWS duas vezes (13
 **Build, testes e CI**
 - Build `linux/arm64` verificado no CI (PR #1) e no `deploy.yml`. O build arm64 local não é possível (o builder do Docker Desktop não tem QEMU). Não foi verificado se `TRIVY_PLATFORM` chega ao scan arm64 do `deploy.yml`.
 - Os testes da app citados vêm da última execução registrada (48 testes: 44 passam, 4 de integração ignorados, 0 falham).
-- O `ci.yml` só roda em `pull_request`, e a integração neste projeto é por merge local no fork (sem PR), então a `main` atual não passou pelo CI. As três últimas execuções registradas (PRs antigos) falharam. O teste `terraform test` do módulo `oidc` estava desatualizado e foi corrigido e validado localmente (6 passam; budget, ecr e ecs seguem verdes). A falha do `terraform plan` do CI não foi diagnosticada.
+- O `ci.yml` só roda em `pull_request`. Desde 14/10 toda mudança passa por um PR de validação no fork, fechado sem merge, antes do merge local na `main`. Os PRs #13 a #22 ficaram todos verdes, exceto o `dockerfile` dos PRs #18 a #21, que falhou pela troca do bundle de CAs do RDS (corrigida no #22). O teste do módulo `oidc` foi corrigido, e o `plan` do CI passa.
 
 **Desempenho**
 - O benchmark local não foi repetido com a imagem final (`--cpus=0.5`, `DB_POOL_MAX=3`) e a compatibilidade do `load.js` local com k6 2.x não foi conferida. Números LOCAIS e AWS não se misturam.
 
 **Segurança**
 - A API é pública e sem autenticação (contrato do desafio).
-- Usuário do banco só com `CONNECT`: **implementado e validado na AWS em 14/10/2026** (autenticação IAM do RDS, [ADR 0013](docs/adr/0013-usuario-da-app-so-connect-via-iam.md), runbook em [`docs/usuario-db-iam.md`](docs/usuario-db-iam.md)): a role da API não lê o segredo master e, como `app_connect`, criar objetos ou virar master é negado. **Custo medido:** a autenticação IAM usa ~117 MiB de RAM e ~150 MiB de swap no `db.t4g.micro` (confirmado por A/B na mesma instância); 2 h de soak a 600 req/s com 0% de erro. Margem de memória fina; **decisão do Leandro (14/10): manter o IAM no `db.t4g.micro`** (ADR 0013). A app pré-aquece o token e a primeira conexão na partida (mitigação do 503 da primeira conexão fria; ainda não medida na AWS). O `dev.tfvars` está em `db_iam_auth = true`; com `false` volta ao modo anterior (master).
+- Usuário do banco só com `CONNECT`: **implementado e validado na AWS em 14/10/2026** (autenticação IAM do RDS, [ADR 0013](docs/adr/0013-usuario-da-app-so-connect-via-iam.md), runbook em [`docs/usuario-db-iam.md`](docs/usuario-db-iam.md)): a role da API não lê o segredo master e, como `app_connect`, criar objetos ou virar master é negado. **Custo medido:** a autenticação IAM usa ~117 MiB de RAM e ~150 MiB de swap no `db.t4g.micro` (confirmado por A/B na mesma instância); 2 h de soak a 600 req/s com 0% de erro. Margem de memória fina; **decisão do Leandro (14/10): manter o IAM no `db.t4g.micro`** (ADR 0013). A app pré-aquece o token e a primeira conexão na partida, como mitigação do 503 da primeira conexão fria. Medido na AWS em 14/10: depois de um restart, o primeiro `/connect` deu 200 em 0,84 s; antes dava 503 em 2 s. Na primeiríssima partida, antes do `db-init`, o pré-aquecimento só registra o `28P01` e a app continua no ar. O `dev.tfvars` está em `db_iam_auth = true`; com `false` volta ao modo anterior (master).
 - A role `gha-infra` cria roles e policies com prefixo `simple-api-*` com conteúdo livre (escalada dentro do prefixo). O IAM Access Analyzer não foi usado para validar as policies.
 - O `infra.yml` tem um job só: a aprovação acontece antes do plan ser visto. Separar `plan` e `apply` é melhoria pendente.
 - O `trivy-action` roda no job do `deploy.yml` que tem credenciais AWS temporárias, e o job `plan` do `ci.yml` executa HCL do próprio PR com a role de leitura.
 - A saída das tasks em 443 e 53 para `0.0.0.0/0` é necessária sem NAT, mas é ampla.
-- O SHA-256 do CA bundle da RDS foi medido uma vez localmente (a AWS não publica checksum).
+- O SHA-256 do CA bundle da RDS é fixado por TOFU (a AWS não publica checksum). Em 14/10 a AWS trocou o arquivo e o build falhou como projetado. Conferi certificado a certificado: passou de 111 para 114, entraram só as 3 raízes da região sa-west-1 e nenhuma saiu. Depois disso atualizei o hash (PR #22).
 - O repositório é público e o account id aparece nos logs das Actions (via OIDC): considerar torná-lo privado ao final.
 - O hook local do gitleaks existe em [`.pre-commit-config.yaml`](.pre-commit-config.yaml) (mesma versão do CI, 8.30.1; instalar com `pip install pre-commit && pre-commit install`). Validado em 14/10/2026: bloqueia um segredo falso no stage (`github-pat`, exit 1) e passa sem nada staged. Ele só olha o que está staged; o histórico completo continua sendo coberto pelo `gitleaks git` do CI.
 
