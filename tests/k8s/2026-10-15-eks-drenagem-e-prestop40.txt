@@ -1,0 +1,79 @@
+Rolling restart no EKS com trafego (15/10/2026, tarde). Rotulo: AWS. Mesmo metodo de 2026-10-15-eks-rolling-restart-keepalive.txt
+(4 lacos curl em /eks/health pelo API Gateway, timeout 5 s; alvos do NLB e pods a cada ~1 s; cross-zone e readiness gate ligados).
+Imagem 820175a (drenagem: SIGUSR2 -> Connection: close).
+
+##### Configuracao A: preStop 'kill -USR2 1; sleep 8' (drenagem + 8 s), 13:31 a 13:48
+===== medicao A1
+marcos: {'base_ok': -4.1, 'restart': 0.0, 'rollout_ok': 45.8, 'antigo_sumiu': 54.4, 'fim': 174.7}
+requisicoes=645 falhas=0
+mudancas nos alvos do NLB:
+  + -19.3s 10.100.1.71(1a):healthy
+  +  13.5s 10.100.1.71(1a):healthy, 10.100.2.226(1b):initial
+  +  44.4s 10.100.1.71(1a):draining, 10.100.2.226(1b):healthy
+===== medicao A2
+marcos: {'base_ok': -6.0, 'restart': 0.0, 'rollout_ok': 42.2, 'antigo_sumiu': 51.2, 'fim': 171.4}
+requisicoes=639 falhas=2
++  49.9s w2 http=000 timeout t=5.009553s | alvos: 10.100.1.71(1a):healthy; 10.100.2.226(1b):draining | pods: 5njvx:Running/True; lh2v2:Running/True/apagando
++  51.6s w1 http=000 timeout t=5.012388s | alvos: 10.100.1.71(1a):healthy; 10.100.2.226(1b):draining | pods: 5njvx:Running/True
+mudancas nos alvos do NLB:
+  + -21.2s 10.100.1.71(1a):draining, 10.100.2.226(1b):healthy
+  +  12.3s 10.100.1.71(1a):initial, 10.100.2.226(1b):healthy
+  +  38.9s 10.100.1.71(1a):healthy, 10.100.2.226(1b):healthy
+  +  43.3s 10.100.1.71(1a):healthy, 10.100.2.226(1b):draining
+===== medicao A3
+marcos: {'base_ok': -5.4, 'restart': 0.0, 'rollout_ok': 44.4, 'antigo_sumiu': 53.0, 'fim': 173.3}
+requisicoes=527 falhas=4
++  51.4s w1 http=503 curl 23 t=0.508244s | alvos: 10.100.1.71(1a):draining; 10.100.2.95(1b):healthy; 10.100.2.226(1b):draining | pods: mgrd6:Running/True
++  51.9s w2 http=000 timeout t=5.008144s | alvos: 10.100.1.71(1a):draining; 10.100.2.95(1b):healthy; 10.100.2.226(1b):draining | pods: mgrd6:Running/True
++  52.4s w3 http=000 timeout t=5.012187s | alvos: 10.100.1.71(1a):draining; 10.100.2.95(1b):healthy; 10.100.2.226(1b):draining | pods: mgrd6:Running/True
++  56.4s w4 http=503 curl 23 t=3.458659s | alvos: 10.100.1.71(1a):draining; 10.100.2.95(1b):healthy; 10.100.2.226(1b):draining | pods: mgrd6:Running/True
+mudancas nos alvos do NLB:
+  + -20.6s 10.100.1.71(1a):healthy, 10.100.2.226(1b):draining
+  +   8.1s 10.100.1.71(1a):healthy, 10.100.2.226(1b):draining, 10.100.2.95(1b):initial
+  +  41.7s 10.100.1.71(1a):draining, 10.100.2.226(1b):draining, 10.100.2.95(1b):healthy
+  + 116.1s 10.100.1.71(1a):draining, 10.100.2.95(1b):healthy
+===== medicao A4
+marcos: {'base_ok': -9.0, 'restart': 0.0, 'rollout_ok': 45.1, 'antigo_sumiu': 57.1, 'fim': 177.5}
+requisicoes=508 falhas=1
++  51.4s w4 http=503 curl 23 t=0.536470s | alvos: 10.100.1.71(1a):healthy; 10.100.2.95(1b):draining | pods: 2hcvj:Running/True
+mudancas nos alvos do NLB:
+  + -24.6s 10.100.1.71(1a):draining, 10.100.2.95(1b):healthy
+  +  14.8s 10.100.1.71(1a):initial, 10.100.2.95(1b):healthy
+  +  37.3s 10.100.1.71(1a):healthy, 10.100.2.95(1b):healthy
+  +  46.4s 10.100.1.71(1a):healthy, 10.100.2.95(1b):draining
+===== medicao A5
+marcos: {'base_ok': -5.7, 'restart': 0.0, 'rollout_ok': 46.7, 'antigo_sumiu': 55.9, 'fim': 176.3}
+requisicoes=534 falhas=1
++  53.9s w4 http=000 timeout t=5.201253s | alvos: 10.100.1.71(1a):draining; 10.100.2.95(1b):healthy | pods: fvkjq:Running/True
+mudancas nos alvos do NLB:
+  + -20.9s 10.100.1.71(1a):healthy, 10.100.2.95(1b):draining
+  +  11.1s 10.100.1.71(1a):healthy, 10.100.2.95(1b):initial
+  +  43.9s 10.100.1.71(1a):draining, 10.100.2.95(1b):healthy
+
+##### Configuracao B: preStop 'kill -USR2 1; sleep 40', terminationGracePeriodSeconds 60 (commit 043fa23), 13:57 a 14:08
+===== medicao B1
+marcos: {'base_ok': -4.4, 'restart': 0.0, 'rollout_ok': 42.7, 'antigo_sumiu': 83.5, 'fim': 203.8}
+requisicoes=712 falhas=0
+mudancas nos alvos do NLB:
+  + -19.6s 10.100.1.71(1a):healthy, 10.100.2.95(1b):draining
+  +   6.1s 10.100.1.71(1a):healthy, 10.100.2.95(1b):initial
+  +  41.0s 10.100.1.71(1a):draining, 10.100.2.95(1b):healthy
+===== medicao B2
+marcos: {'base_ok': -5.7, 'restart': 0.0, 'rollout_ok': 44.0, 'antigo_sumiu': 84.5, 'fim': 204.8}
+requisicoes=716 falhas=0
+mudancas nos alvos do NLB:
+  + -20.9s 10.100.1.71(1a):draining, 10.100.2.95(1b):healthy
+  +  12.5s 10.100.1.71(1a):initial, 10.100.2.95(1b):healthy
+  +  44.7s 10.100.1.71(1a):healthy, 10.100.2.95(1b):draining
+===== medicao B3
+marcos: {'base_ok': -3.9, 'restart': 0.0, 'rollout_ok': 41.6, 'antigo_sumiu': 81.8, 'fim': 202.6}
+requisicoes=653 falhas=0
+mudancas nos alvos do NLB:
+  + -19.1s 10.100.1.71(1a):healthy, 10.100.2.95(1b):draining
+  +   7.6s 10.100.1.71(1a):healthy, 10.100.2.214(1b):initial, 10.100.2.95(1b):draining
+  +  39.6s 10.100.1.71(1a):draining, 10.100.2.214(1b):healthy, 10.100.2.95(1b):draining
+  + 115.1s 10.100.1.71(1a):draining, 10.100.2.214(1b):healthy
+
+Resumo: A = 8 falhas em 2.853 requisicoes (0,28%), todas em volta do SIGTERM (drenagem confirmada no log: 'drenagem iniciada' 8,0 s antes do SIGTERM).
+        B = 0 falhas em 2.081 requisicoes (SIGTERM 40 s depois de o alvo ir a draining).
+Referencia sem drenagem e sleep 8 (manha): 8 em 2.638 (0,30%).

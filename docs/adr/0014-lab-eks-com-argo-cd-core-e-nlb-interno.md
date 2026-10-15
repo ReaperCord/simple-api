@@ -56,7 +56,16 @@ Complementa o [ADR 0007](0007-eks-somente-como-laboratorio-efemero.md) (EKS só 
     - **503 do API Gateway**, no SIGTERM: a app fecha as conexões keep-alive enquanto o VPC Link envia uma requisição por elas.
     - **Timeout de 5 s**, logo depois: o VPC Link reaproveita uma conexão presa ao alvo `draining`, que o NLB mantém por até 300 s, depois que o pod já morreu.
 
-    **Correção proposta, não implementada** (exige imagem nova e outra janela para medir): o `preStop` vira `kill -USR2 1; sleep 8`. No SIGUSR2, a app entra em drenagem e responde com `Connection: close`, então o VPC Link migra o pool para o pod novo antes do SIGTERM. Opcionalmente, `deregistration_delay.connection_termination.enabled=true` com um `deregistration_delay` curto no target group.
+    **Tarde de 15/10 (correção medida;** dados em [`tests/k8s/2026-10-15-eks-drenagem-e-prestop40.txt`](../../tests/k8s/2026-10-15-eks-drenagem-e-prestop40.txt)**):**
+    - **Drenagem com `sleep 8`.** No SIGUSR2 a app passa a responder com `Connection: close` (`src/drain.js`, imagem `820175a`), e o `preStop` é `kill -USR2 1; sleep 8`. **Não resolveu:** 8 falhas em 2.853 (0,28%). O log confirma a drenagem 8 s antes do SIGTERM.
+    - **Causa real.** As conexões novas abertas por causa do `Connection: close` ainda chegavam ao pod antigo. Então **o NLB continua mandando fluxos novos ao alvo `draining` por mais de 8 s** depois da desregistração.
+    - **`preStop` de 40 s com grace de 60 s,** só no overlay do EKS, pelo GitOps (`043fa23`): **0 falhas em 2.081**. Na taxa anterior, seriam esperadas ~6.
+    - **Mantido:** a drenagem fica, porque não piorou nada, mas não provou ganho próprio. O kind continua com 8 s.
+  - **Dashboard do Argo CD.** `argocd admin dashboard -n argocd` roda a interface na máquina do operador, com o acesso dele ao cluster. Nada é instalado no cluster e nada fica exposto. Testado em 15/10, com o CLI v3.5.5 conferido pelo checksum do release.
+  - **Taxonomia de tags (15/10).** `Component` em todos os recursos do lab, labels `project`, `track` e `component` nos objetos do Kubernetes, e as mesmas tags no NLB por anotação. Conferido na AWS.
+  - **Achados novos, a corrigir.**
+    - Um apply da stack principal com o lab no ar remove as tags `kubernetes.io/role/internal-elb` das subnets privadas; o `up` as recria. A correção é um `ignore_tags` com o prefixo `kubernetes.io/` no provider da stack.
+    - Repetir o `up` com o lab no ar faz a etapa 1 destruir as rotas `/eks`, que a etapa 2 recria segundos depois. A correção é manter `enable_api_route` na etapa 1 quando o lab já existe.
 - **Memória dos nós**: `t4g.small` tem 2 GiB; controller, Argo CD core, CoreDNS, metrics-server, kube-proxy e a app dividem os 2 nós. O controller roda com 1 réplica por isso.
 - **Efeito na stack principal**: as tags `kubernetes.io/role/internal-elb` nas subnets privadas são do lab; se a stack principal for aplicada com o lab no ar, o Terraform dela vai querer removê-las. O lab sempre é destruído antes.
 - **Memória medida**: os nós ficaram em 49% e 65% de memória com tudo no ar (`kubectl top nodes`).
