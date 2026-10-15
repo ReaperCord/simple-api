@@ -1,6 +1,10 @@
-# Laboratorio EKS efemero (06-cicd.md, 07-eks-lab.md): `up` e `down` manuais e um agendamento horario que DESTROI o lab
-# vencido (TTL de 6 h, gravado na tag TTL do cluster). Role gha-eks-lab por OIDC; environment "eks-lab" SEM aprovacao
-# de proposito: o destroy agendado precisa rodar sozinho. Pre-requisito: a stack principal no ar (VPC, RDS, API Gateway)
+# Laboratorio EKS efemero (06-cicd.md, 07-eks-lab.md): `up` e `down` manuais e `gc`, que DESTROI o lab se o TTL (gravado
+# na tag TTL do cluster) venceu. Quem dispara o gc:
+#  1. o vigia (eks-lab-watchdog.yml), disparado por todo `up`: dorme ate o TTL e chama o gc. E a rede principal.
+#  2. o agendamento horario, como segunda rede. NAO e confiavel sozinho: o GitHub atrasa ou descarta `schedule`
+#     (medido em 14 e 15/10/2026: 3 execucoes em ~17 h de cron horario).
+# TTL de 1 a 5 h (o vigia precisa caber no limite de 6 h por job do GitHub). Role gha-eks-lab por OIDC; environment
+# "eks-lab" SEM aprovacao de proposito: o destroy pelo TTL precisa rodar sozinho. Pre-requisito: a stack principal no ar (VPC, RDS, API Gateway)
 # e a imagem ja publicada no ECR (deploy.yml). Custo ~US$ 0,17/h (plano de controle) mais nos, NLB e a stack principal.
 name: eks-lab
 
@@ -8,22 +12,27 @@ on:
   workflow_dispatch:
     inputs:
       action:
-        description: "up (sobe o lab) ou down (destroi)"
+        description: "up (sobe o lab), down (destroi) ou gc (destroi so se o TTL venceu; usado pelo vigia)"
         type: choice
         options:
           - up
           - down
+          - gc
         default: up
       image_tag:
         description: "Tag da imagem ja publicada no ECR (SHA do commit; nunca latest); so para up"
         type: string
         required: false
+      ttl_hours:
+        description: "So para up: horas ate o lab ser destruido sozinho (1 a 5)"
+        type: choice
+        options: ["1", "2", "3", "4", "5"]
+        default: "5"
   schedule:
     - cron: "17 * * * *" # a cada hora: destroi o lab se o TTL venceu
 
 permissions:
-  contents: read
-  id-token: write # assume gha-eks-lab; este workflow tem um unico job
+  contents: read # cada job pede o que precisa (id-token so no lab; actions: write so no watchdog)
 
 concurrency:
   group: eks-lab
@@ -35,13 +44,69 @@ env:
   CLUSTER_NAME: simple-api-dev-eks
   LBC_CHART_VERSION: "3.6.0" # helm chart eks/aws-load-balancer-controller (app v3.6.0)
   ARGOCD_VERSION: "v3.5.5" # manifestos core-install (so os componentes core, sem UI nem dex)
-  LAB_TTL_HOURS: "6"
 
 jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      action: ${{ steps.decide.outputs.action }}
+      ttl: ${{ steps.decide.outputs.ttl }}
+    steps:
+      - name: Decidir a acao, validar entradas e calcular o TTL
+        id: decide
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT_ACTION: ${{ inputs.action }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+          TTL_HOURS: ${{ inputs.ttl_hours }}
+        run: |
+          set -euo pipefail
+          if [[ "${EVENT}" == "schedule" ]]; then
+            echo "action=gc" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          case "${INPUT_ACTION}" in up | down | gc) ;; *) echo "::error::acao invalida: ${INPUT_ACTION}"; exit 1 ;; esac
+          echo "action=${INPUT_ACTION}" >> "${GITHUB_OUTPUT}"
+          if [[ "${INPUT_ACTION}" == "up" ]]; then
+            if [[ ! "${IMAGE_TAG}" =~ ^[A-Za-z0-9_.-]{1,128}$ || "${IMAGE_TAG}" == "latest" ]]; then
+              echo "::error::image_tag invalida (use a tag SHA publicada pelo deploy.yml, nunca latest)."
+              exit 1
+            fi
+            [[ "${TTL_HOURS}" =~ ^[1-5]$ ]] || { echo "::error::ttl_hours deve ser de 1 a 5."; exit 1; }
+            echo "ttl=$(date -u -d "+${TTL_HOURS} hours" +%Y-%m-%dT%H:%M:%SZ)" >> "${GITHUB_OUTPUT}"
+          fi
+
+  # Job separado e minimo: so ele tem actions: write (para disparar o vigia), sem credencial AWS nem helm/kubectl.
+  # Roda em paralelo com o lab: se o up falhar no meio, o vigia ainda destroi o que subiu quando o TTL vencer.
+  watchdog:
+    needs: prepare
+    if: ${{ needs.prepare.outputs.action == 'up' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Disparar o vigia do TTL (eks-lab-watchdog.yml)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TTL: ${{ needs.prepare.outputs.ttl }}
+        run: |
+          set -euo pipefail
+          gh workflow run eks-lab-watchdog.yml --repo "${GITHUB_REPOSITORY}" -f "ttl=${TTL}"
+          echo "Vigia disparado: chama o gc em ${TTL} (UTC)." >> "${GITHUB_STEP_SUMMARY}"
+
   lab:
+    needs: prepare
     runs-on: ubuntu-24.04
     environment: eks-lab
     timeout-minutes: 90
+    permissions:
+      contents: read
+      id-token: write # assume gha-eks-lab
+    env:
+      ACTION: ${{ needs.prepare.outputs.action }}
+      LAB_TTL: ${{ needs.prepare.outputs.ttl }}
     defaults:
       run:
         working-directory: infrastructure/eks-lab
@@ -51,25 +116,6 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Decidir a acao e validar entradas
-        env:
-          EVENT: ${{ github.event_name }}
-          INPUT_ACTION: ${{ inputs.action }}
-          IMAGE_TAG: ${{ inputs.image_tag }}
-        run: |
-          set -euo pipefail
-          if [[ "${EVENT}" == "schedule" ]]; then
-            echo "ACTION=gc" >> "${GITHUB_ENV}"
-          else
-            echo "ACTION=${INPUT_ACTION}" >> "${GITHUB_ENV}"
-            if [[ "${INPUT_ACTION}" == "up" ]]; then
-              if [[ ! "${IMAGE_TAG}" =~ ^[A-Za-z0-9_.-]{1,128}$ || "${IMAGE_TAG}" == "latest" ]]; then
-                echo "::error::image_tag invalida (use a tag SHA publicada pelo deploy.yml, nunca latest)."
-                exit 1
-              fi
-            fi
-          fi
-
       - name: Credenciais AWS via OIDC (gha-eks-lab)
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
@@ -78,7 +124,7 @@ jobs:
           # A action NAO mascara o account id por padrao; os logs deste repo sao publicos.
           mask-aws-account-id: true
 
-      # Agendamento: so continua se existir um cluster do lab com o TTL vencido.
+      # gc (vigia ou agendamento): so continua se existir um cluster do lab com o TTL vencido.
       - name: Verificar o TTL do lab (gc)
         id: ttl
         if: ${{ env.ACTION == 'gc' }}
@@ -129,9 +175,7 @@ jobs:
           ADMIN_ARNS: ${{ secrets.EKS_LAB_ADMIN_ARNS }}
         run: |
           set -euo pipefail
-          ttl="$(date -u -d "+${LAB_TTL_HOURS} hours" +%Y-%m-%dT%H:%M:%SZ)"
-          echo "LAB_TTL=${ttl}" >> "${GITHUB_ENV}"
-          args=(-input=false -auto-approve -var "state_bucket=${TF_STATE_BUCKET}" -var "state_key=${TF_STATE_KEY}" -var "ttl=${ttl}" -var "region=${AWS_REGION}")
+          args=(-input=false -auto-approve -var "state_bucket=${TF_STATE_BUCKET}" -var "state_key=${TF_STATE_KEY}" -var "ttl=${LAB_TTL}" -var "region=${AWS_REGION}")
           if [[ -n "${ADMIN_ARNS:-}" ]]; then args+=(-var "admin_principal_arns=${ADMIN_ARNS}"); fi
           terraform apply "${args[@]}"
 
@@ -282,7 +326,7 @@ jobs:
             done
           done
           {
-            echo "Lab no ar. TTL: ${LAB_TTL}. Destroi sozinho depois do TTL (agendamento horario) ou com a acao down."
+            echo "Lab no ar. TTL: ${LAB_TTL}. Destroi sozinho depois do TTL (vigia e, como segunda rede, o agendamento) ou com a acao down."
             echo "Rode tools/residual-check.sh depois do destroy."
           } >> "${GITHUB_STEP_SUMMARY}"
 
