@@ -37,7 +37,7 @@ gh workflow run eks-lab.yml -f action=down
 `up`: Terraform etapa 1 (cluster, nós, add-ons, Pod Identity, regras do lab) → controller (helm) → Argo CD core → ConfigMap do banco e `Application` → espera Synced/Healthy e o NLB → Terraform etapa 2 (rotas `/eks`) → smoke `GET /eks/health` e `/eks/connect`.
 `down`: apaga o `Application`, o `Service` (o controller remove o NLB), desinstala o controller e roda o `terraform destroy`.
 
-O agendamento horário **destrói** o lab depois do TTL gravado na tag do cluster. **Não conte com ele:** na janela 3 rodou uma vez só em 5 h de lab (o GitHub atrasa ou pula `schedule`). Sempre rode o `down` ao terminar. Depois de qualquer destroy: `tools/residual-check.sh`.
+Destruição pelo TTL: todo `up` dispara o **vigia** (`eks-lab-watchdog.yml`), que dorme até o TTL (`ttl_hours`, de 1 a 5 h; padrão 5) e chama `eks-lab.yml action=gc`. O `gc` só destrói se o cluster ainda estiver no ar e vencido. O agendamento horário segue como segunda rede, mas **não é confiável sozinho** (3 execuções em ~17 h de cron). Validado em 15/10: com o TTL em 11:25:58, o `gc` saiu às 11:28:01 e destruiu o lab até 11:35:57. Para destruir antes do TTL, use `down`. Depois de qualquer destroy: `tools/residual-check.sh`.
 
 Tempos medidos (janela 3, criação do run até o fim): `up` do zero ~13 min até a etapa 2 (run 38645357389); `down` ~12 e ~9 min (runs 38643645498 e 38663075875). Rodar o `up` de novo com o lab no ar não recria nada da etapa 1.
 
@@ -50,7 +50,7 @@ Tempos medidos (janela 3, criação do run até o fim): `up` do zero ~13 min at�
 | helm ou Argo CD: `the server is currently unable to handle the request` | **metrics-server v0.9.0** corrompe o `/openapi/v2` (protobuf dá 503) | add-on em v0.8.1 (`variables.tf`; teste barra v0.9.x) |
 | `Application referencing project default which does not exist` | o Argo CD core não cria o projeto `default` | AppProject `simple-api` criado pelo workflow |
 | etapa 2: `DescribeLoadBalancerAttributes` negado | o `data.aws_lb` chama essa ação | adicionada à policy `eks_lab` |
-| smoke: `GET /eks/health -> 404` logo após a etapa 2 | rotas novas levam alguns segundos para publicar no stage `$default` | smoke repete por até 120 s |
+| smoke: `404`, depois `500`/`503` logo após a etapa 2 | rotas novas levam segundos para publicar no stage `$default`; um NLB recém-criado levou ~4 min para responder pelo VPC Link (15/10) | smoke repete por até 6 min |
 | timeouts no rolling restart | pod novo `Ready` antes de estar no target group; cross-zone do NLB desligado | readiness gate (label do namespace) e `load_balancing.cross_zone.enabled=true` |
 
 Para diagnosticar o `/openapi/v2` (se aparecer de novo com outra versão de add-on):
@@ -69,4 +69,4 @@ curl -sk -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $TOKEN" \
 | Permissão faltando na `gha-eks-lab` | `AccessDenied` no apply | `infrastructure/modules/oidc/main.tf` (policies `eks_lab` e `eks_lab_iam`); antes de corrigir, confirmar com `aws iam simulate-principal-policy` e, para data sources, com `TF_LOG=DEBUG` (lista as chamadas reais) |
 | Memória dos nós | pods `Pending` ou reiniciando | `node_instance_type` (`t4g.small` tem 2 GiB; medido 49% e 65% com tudo no ar) |
 | Pod sem banco | `CreateContainerConfigError` | o ConfigMap `simple-api-db` (criado pelo workflow) |
-| Resíduo no rolling restart | 1 falha em 788 com cross-zone ligado | não investigado |
+| Falhas no rolling restart (0,30%) | 503 ou timeout no SIGTERM do pod antigo: corrida de keep-alive entre o VPC Link e a app, com fluxos presos ao alvo `draining` (medido em 15/10, [`tests/k8s/2026-10-15-eks-rolling-restart-keepalive.txt`](../tests/k8s/2026-10-15-eks-rolling-restart-keepalive.txt)) | proposto, não implementado: drenagem com `Connection: close` disparada no `preStop` (SIGUSR2) ([ADR 0014](adr/0014-lab-eks-com-argo-cd-core-e-nlb-interno.md)) |
