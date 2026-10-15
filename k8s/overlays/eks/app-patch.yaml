@@ -5,8 +5,16 @@ metadata:
 spec:
   template:
     spec:
+      # O NLB leva mais de 1 minuto para parar de mandar conexoes a um alvo desregistrado: na janela 3 as falhas
+      # (timeout) seguiram por ~65 s depois de o pod antigo sumir, com o preStop de 8 s da base (calibrado no kind).
+      # 90 s de preStop cobrem isso com folga; o grace period cobre preStop + encerramento da app (ate 8 s).
+      terminationGracePeriodSeconds: 120
       containers:
         - name: simple-api
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "90"]
           # DB_HOST, DB_PORT, DB_DATABASE e DB_USER vem do ConfigMap `simple-api-db` (criado pelo workflow).
           envFrom:
             - configMapRef:
