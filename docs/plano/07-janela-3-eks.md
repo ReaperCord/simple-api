@@ -74,7 +74,12 @@ Dados brutos e lista de execuções: [`tests/k8s/2026-10-14-eks-janela-3-resulta
 
 **Fora do plano:** a AWS trocou o bundle de CAs do RDS (111 para 114 certificados, só entraram as 3 raízes da região sa-west-1). O `ADD --checksum` do Dockerfile barrou o build, como projetado; hash atualizado no PR #22 e imagem nova no ECS (task definition `:8`, `/connect` = 200).
 
-**Custo estimado:** ~US$ 0,90 a 1,00 (~4,6 h de plano de controle, ~4 h de nós, ~2,7 h de NLB, ~5,2 h de stack), abaixo do teto de US$ 1,5. **A confirmar** no Cost Explorer (atraso de ~24 h).
+**Custo:** estimado em ~US$ 0,90 a 1,00, com teto de US$ 1,5. Real, pelo Cost Explorer em 15/10:
+- linhas exclusivas do lab: **US$ 0,52**, sendo 4,43 h de plano de controle e 3 h cobradas de NLB;
+- janela inteira, com a stack principal: **~US$ 0,75 a 0,80**;
+- os nós `t4g.small` saíram **de graça**, cobertos pelo Free Tier.
+
+Detalhe em [`05-custo-real.md`](05-custo-real.md).
 
 **Lições:**
 - O GC por `schedule` rodou uma vez em 5 h. O `down` manual é obrigatório.

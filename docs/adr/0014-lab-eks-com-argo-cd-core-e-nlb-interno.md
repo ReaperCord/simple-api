@@ -53,7 +53,7 @@ Complementa o [ADR 0007](0007-eks-somente-como-laboratorio-efemero.md) (EKS só 
 - **Memória dos nós**: `t4g.small` tem 2 GiB; controller, Argo CD core, CoreDNS, metrics-server, kube-proxy e a app dividem os 2 nós. O controller roda com 1 réplica por isso.
 - **Efeito na stack principal**: as tags `kubernetes.io/role/internal-elb` nas subnets privadas são do lab; se a stack principal for aplicada com o lab no ar, o Terraform dela vai querer removê-las. O lab sempre é destruído antes.
 - **Memória medida**: os nós ficaram em 49% e 65% de memória com tudo no ar (`kubectl top nodes`).
-- **Custo**: plano de controle em suporte padrão US$ 0,10/h; nós `t4g.small` ~US$ 0,0168/h cada (aproximado, tabela de FinOps); NLB US$ 0,0225/h mais LCU; mais a stack principal no ar (~US$ 0,04/h). Estimativa da janela 3 (cerca de 4,6 h de plano de controle, 4 h de nós, 2,7 h de NLB e 5,2 h de stack): **~US$ 0,90 a 1,00**, **a confirmar** no Cost Explorer.
+- **Custo**: plano de controle em suporte padrão US$ 0,10/h; nós `t4g.small` ~US$ 0,0168/h cada (aproximado, tabela de FinOps); NLB US$ 0,0225/h mais LCU; mais a stack principal no ar (~US$ 0,04/h). Real da janela 3, pelo Cost Explorer: **US$ 0,52** nas linhas exclusivas do lab (4,43 h de plano de controle, 3 h de NLB) e ~US$ 0,75 a 0,80 com a stack principal. Os nós `t4g.small` foram **cobertos pelo Free Tier** (7,9 h a US$ 0). Ver [`05-custo-real.md`](../plano/05-custo-real.md).
 
 ## Status
 
