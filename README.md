@@ -7,7 +7,7 @@
 Entrega do **Desafio Técnico de Arquiteto de Cloud (AWS) da KXC Tecnologia**: uma API Node.js que consulta um PostgreSQL, publicada na AWS com Dockerfile, Terraform e CI/CD no GitHub Actions, numa VPC própria.
 
 **Estado em 15/10/2026:**
-- A stack foi aplicada, testada e destruída na AWS em cinco janelas, entre 13 e 15/10.
+- A stack foi aplicada, testada e destruída na AWS em seis janelas, entre 13 e 15/10.
 - Os testes cobriram carga, spike com autoscaling, soak de 2 h, restore PITR e um laboratório EKS.
 - Hoje a stack está **destruída**. Só o bootstrap continua aplicado: bucket de state, ECR, budget e as roles da pipeline.
 - Cada número deste README vem de uma medição com arquivo de dados no repositório.
