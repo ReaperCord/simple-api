@@ -3,6 +3,7 @@
 const { createApp } = require('./app');
 const { loadConfig, ConfigError } = require('./config');
 const { createDb } = require('./db');
+const { createDrain } = require('./drain');
 const { createIamTokenProvider } = require('./iam-auth');
 const { prewarm } = require('./prewarm');
 const { createLogger } = require('./logger');
@@ -69,7 +70,8 @@ function main() {
   }
 
   const db = createDb({ config, logger, secretProvider });
-  const app = createApp({ db, logger, config });
+  const drain = createDrain();
+  const app = createApp({ db, logger, config, drain });
 
   // listen DEPOIS de montar todas as rotas.
   const server = app.listen(config.port, () => {
@@ -90,6 +92,11 @@ function main() {
   };
   process.on('SIGTERM', () => onSignal('SIGTERM'));
   process.on('SIGINT', () => onSignal('SIGINT'));
+  // SIGUSR2 = drenagem (src/drain.js), mandado pelo preStop do Deployment antes do SIGTERM. No ECS nao ha preStop:
+  // nada muda la. (SIGUSR1 e reservado pelo Node para o depurador.)
+  process.on('SIGUSR2', () => {
+    if (drain.start()) logger.info('drenagem iniciada: respostas com Connection: close', { signal: 'SIGUSR2' });
+  });
 }
 
 if (require.main === module) main();
