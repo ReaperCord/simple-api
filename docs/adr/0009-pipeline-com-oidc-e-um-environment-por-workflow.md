@@ -51,7 +51,13 @@ Autenticar na AWS somente por OIDC, sem chaves de acesso de longo prazo, com uma
 
 Riscos residuais conhecidos:
 
-- (Resolvido em 14/10/2026) O `infra.yml` tinha um único job, e a aprovação vinha antes do plan. Hoje o aprovador lê o plano antes de aprovar, e plano destrutivo exige confirmação explícita. **Exercitado de ponta a ponta só com `action=plan`.** Um `apply` e um `destroy` reais pelo fluxo novo ficam para a próxima janela de AWS.
+- (Resolvido em 14/10/2026) O `infra.yml` tinha um único job, e a aprovação vinha antes do plan. Hoje o aprovador lê o plano antes de aprovar, e plano destrutivo exige confirmação explícita. **Exercitado no GitHub em 14/10/2026**, com a stack destruída:
+  - `action=plan` (run 38669868242): 54 a criar, não destrutivo; `apply` pulado.
+  - `action=destroy` com o state vazio (run 38669878847): sem mudanças; `apply` pulado, sem pedir gate.
+  - `action=apply` (run 38670814968): o plano foi guardado no bucket. Conferido à parte: 62.107 bytes, AES256, SHA-256 `3dfc8431…` calculado sobre o arquivo baixado. A comparação com o hash do resumo do run é visual (a API não expõe o resumo do job). O `apply` ficou no gate, e o gate foi **rejeitado**: nenhum passo rodou e nada foi criado.
+- **Ainda não exercitado no GitHub:**
+  - o download, a conferência do hash e o apply do job `apply`, que ficam para o próximo apply real;
+  - o bloqueio por `confirm_destructive`, que precisa de state com recursos. Foi validado localmente com um plano destrutivo real (`terraform_data`, 1 replace e 1 delete) e por 9 testes no CI.
 - A confirmação destrutiva é um texto fixo (`dev`). Ela evita o clique automático, mas não substitui ler a lista.
 - A role `gha-infra` cria roles e policies com o prefixo `simple-api-*`. O conteúdo das policies criadas é livre, o que permite escalada de privilégio dentro do prefixo, e as policies não foram validadas com o IAM Access Analyzer.
 - O `aquasecurity/trivy-action` roda no job que tem credenciais AWS temporárias da `gha-deploy`.
@@ -60,4 +66,4 @@ Riscos residuais conhecidos:
 
 ## Status
 
-Aceito. Implementado nos workflows `ci.yml`, `deploy.yml`, `infra.yml`, `eks-lab.yml` e no módulo `oidc`, e executado contra a AWS. O fluxo de dois jobs do `infra.yml` foi validado até o `plan`.
+Aceito. Implementado nos workflows `ci.yml`, `deploy.yml`, `infra.yml`, `eks-lab.yml` e no módulo `oidc`, e executado contra a AWS. O fluxo de dois jobs do `infra.yml` foi validado até o gate. O apply do plano revisado fica para a próxima janela de AWS.
