@@ -71,8 +71,11 @@ spec:
               # O pod que sai recebe SIGTERM e para de aceitar conexoes, mas o kube-proxy (e o NLB, no EKS) ainda levam
               # alguns segundos para tira-lo dos enderecos. Sem esta espera o rolling update perde requisicoes
               # (medido no kind: 1 falha em 358). O sleep do busybox existe na imagem alpine.
+              # Antes da espera, SIGUSR2 no PID 1 (o node; CMD sem init intermediario, mesmo uid 1000) liga a drenagem:
+              # as respostas saem com Connection: close e o cliente keep-alive (VPC Link -> NLB, no EKS) migra para o
+              # pod novo antes do SIGTERM (src/drain.js; medido em 15/10/2026: 0,30% de falhas, todas no SIGTERM).
               exec:
-                command: ["sleep", "8"]
+                command: ["sh", "-c", "kill -USR2 1; sleep 8"]
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

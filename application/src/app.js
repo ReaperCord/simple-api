@@ -46,9 +46,10 @@ function errorHandler(logger) {
   };
 }
 
-function createApp({ db, logger }) {
+function createApp({ db, logger, drain }) {
   const app = express();
   app.disable('x-powered-by');
+  if (drain) app.use(drain.middleware); // antes de tudo: vale para qualquer rota, inclusive erro
   app.use(requestContext(logger));
   app.use(express.json({ limit: '16kb' }));
 
