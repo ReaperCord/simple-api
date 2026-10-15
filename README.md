@@ -25,7 +25,8 @@ Sumário:
 10. [Diferencial: laboratório EKS](#10-diferencial-laboratório-eks)
 11. [Como executar](#11-como-executar)
 12. [Estrutura do repositório e documentação](#12-estrutura-do-repositório-e-documentação)
-13. [O que ficou pendente](#13-o-que-ficou-pendente)
+13. [Uso de IA](#13-uso-de-ia)
+14. [O que ficou pendente](#14-o-que-ficou-pendente)
 
 ---
 
@@ -370,7 +371,39 @@ simple-api/
 | [`docs/verificacoes/`](docs/verificacoes) | Conferência das afirmações dos docs contra dados e estado real |
 | [`docs/historico.md`](docs/historico.md) | Diário detalhado das janelas: o que funcionou, o que falhou e como foi corrigido |
 
-## 13. O que ficou pendente
+## 13. Uso de IA
+
+O uso de IA foi permitido no desafio, com o pedido de explicar como ela foi usada e qual foi a participação de cada lado.
+
+**As decisões de arquitetura foram 100% humanas.**
+- O Leandro decidiu e registrou cada escolha **antes** da implementação:
+  - API Gateway no lugar do ALB e nenhum NAT;
+  - ECS como trilha principal e EKS só como laboratório;
+  - RDS privado com autenticação IAM;
+  - os três roots de Terraform e o modelo de OIDC por environment.
+- Os registros ficam nas regras do projeto ([`.kiro/steering/`](.kiro/steering)) e nos [ADRs](docs/adr/README.md).
+- Também foram dele os pontos de decisão durante a execução: manter o IAM no `db.t4g.micro`, seguir para o EKS e aprovar cada janela de custo.
+- **Nenhum `apply`, `destroy` ou gate de produção rodou sem aprovação humana explícita.** Os gates `infra` do GitHub foram aprovados por ele, depois de ler o plano.
+
+**A IA acelerou a implementação.** Foram usados o **Claude Code** (Anthropic) e o **Kiro** (AWS) para:
+- escrever e revisar o código: Terraform, aplicação, testes, workflows e scripts de `tools/`, a partir das decisões já tomadas;
+- rodar as validações locais e no CI: `terraform fmt`, `validate` e `test`, lint, scanners e testes de mutação;
+- diagnosticar falhas com evidência: logs do Actions, `iam simulate-principal-policy`, `kubectl --dry-run=server`, log de debug do Terraform;
+- conduzir as medições na AWS (carga, soak, restore, rolling restart) e extrair os números dos arquivos de dados;
+- redigir a documentação e os ADRs, e conferir cada afirmação contra os dados ([`docs/verificacoes/`](docs/verificacoes)).
+
+**Como a IA foi controlada:**
+- **Contrato de trabalho:** [`AGENTS.md`](AGENTS.md), com 12 regras. Entre elas: ler antes de afirmar, rotular fatos e hipóteses, não inventar números nem APIs, nenhum custo sem aprovação no turno, segredo nunca no repositório.
+- **Agentes do Kiro** com permissões por escopo ([`.kiro/agents/`](.kiro/agents)). As credenciais da IA eram de leitura por padrão; a escrita na AWS só acontecia pelo pipeline com gate ou com aprovação explícita.
+- **Arquivos fora do alcance da IA:** as regras do projeto (`.kiro/`) e o `AGENTS.md` só eram editados pelo Leandro.
+
+**Onde a IA errou, e como foi pego.** Hipóteses da IA foram descartadas quando a medição as contrariou. No lab EKS:
+- um retry do helm para um erro que não era transitório;
+- um `preStop` de 90 s que não resolvia a falha.
+
+Afirmações erradas na documentação foram corrigidas na revisão; por exemplo, o Multi-AZ apareceu como parâmetro do módulo e não é. O histórico completo está em [`docs/historico.md`](docs/historico.md) e nos relatórios de verificação.
+
+## 14. O que ficou pendente
 
 O desafio pede para documentar o que faltou e como seria resolvido.
 
