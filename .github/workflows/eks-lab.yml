@@ -269,10 +269,17 @@ jobs:
         run: |
           set -euo pipefail
           [[ -n "${API_URL}" ]] || { echo "::error::vars.API_URL nao definida."; exit 1; }
+          # Laco explicito: as rotas novas levam alguns segundos para o auto-deploy do stage $default (na janela 3 o
+          # primeiro GET deu 404 e minutos depois 200). `curl --retry` nao serve aqui: sem --fail, 404 nao e erro.
           for path in /eks/health /eks/connect; do
-            code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 --retry 8 --retry-delay 10 --retry-all-errors "${API_URL%/}${path}" || true)"
-            echo "GET ${path} -> ${code}"
-            [[ "${code}" == "200" ]] || { echo "::error::GET ${path} devolveu ${code}."; exit 1; }
+            deadline=$((SECONDS + 120))
+            while :; do
+              code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 "${API_URL%/}${path}" || true)"
+              echo "GET ${path} -> ${code}"
+              [[ "${code}" == "200" ]] && break
+              (( SECONDS < deadline )) || { echo "::error::GET ${path} devolveu ${code} por 120 s."; exit 1; }
+              sleep 10
+            done
           done
           {
             echo "Lab no ar. TTL: ${LAB_TTL}. Destroi sozinho depois do TTL (agendamento horario) ou com a acao down."

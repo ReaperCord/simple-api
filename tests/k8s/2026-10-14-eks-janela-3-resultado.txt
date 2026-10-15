@@ -1,0 +1,65 @@
+Laboratorio EKS na AWS: janela 3 (14/10/2026). Horarios em Brasilia (UTC-3). Rotulo: AWS.
+Cluster simple-api-dev-eks, Kubernetes 1.36 (v1.36.4-eks), 2 nos t4g.small (us-east-1a e us-east-1b),
+imagem e1673a4759f6ab77ea04af026f3e488c74c42da4, API Gateway 170sv2papi (o mesmo da stack principal).
+
+== Execucoes (GitHub Actions; horario de criacao do run) ==
+16:58  infra.yml apply             38628196715  54 added (terminou 17:08)
+17:13  eks-lab up                  38630254329  falha no OIDC: secret gravado como "-" (gh secret set --body -)
+17:21  eks-lab up                  38631401495  cluster criado; CreateNodegroup: falta iam:GetRole (SLR do node group)
+17:44  eks-lab up                  38634565252  mesmo erro: GetRole de role inexistente e avaliado pelo ARN SEM path
+17:48  eks-lab up                  38635197983  node group e add-ons OK; CreatePodIdentityAssociation: PassRole sem pods.eks.amazonaws.com
+17:53  eks-lab up                  38635895202  etapa 1 OK; helm do controller: "the server is currently unable to handle the request"
+18:02  eks-lab up                  38637146552  mesmo erro do helm com 3 tentativas (nao era transitorio)
+18:22  eks-lab up                  38639782172  controller e Argo CD OK; Application: "project default which does not exist"
+18:43  eks-lab up                  38642401596  cancelado: Argo CD "failed to load open api schema" (mesma causa raiz do helm)
+18:53  eks-lab down                38643645498  sucesso (lab recriado do zero para trocar o metrics-server)
+19:07  eks-lab up                  38645357389  app Synced/Healthy e NLB OK; etapa 2: falta elasticloadbalancing:DescribeLoadBalancerAttributes
+20:16  eks-lab (agendamento)       38653007546  so a checagem de TTL; nao destruiu (TTL valido). Unica execucao agendada
+                                                entre 17h e 22h, embora o cron seja horario: o GitHub atrasa ou pula agendamentos
+20:39  eks-lab up                  38655451862  etapa 2 OK; smoke: GET /eks/health 404 (rotas ainda publicando no stage $default)
+21:41  deploy.yml (merge do PR #22) 38661444046 sucesso (bundle de CAs do RDS novo no ECS)
+21:58  eks-lab down                38663075875  sucesso
+22:08  infra.yml destroy           38664023276  54 destroyed
+
+== Causa raiz dos erros "server is currently unable to handle the request" ==
+Add-on metrics-server v0.9.0-eksbuild.12 corrompe o /openapi/v2 agregado:
+  GET /openapi/v2 (application/json)                                     -> 200, 131 ocorrencias de "ArbitraryKeys",
+                                                                            "SchemaProps" e "SwaggerSchemaProps"
+  GET /openapi/v2 (application/com.github.proto-openapi.spec.v2@v1.0+protobuf) -> 503
+  /openapi/v3 -> 200; APIServices todas Available=True (por isso o kubectl wait nao pegou)
+Quem pede o v2 em protobuf quebra: validacao de `kind: List` (kubectl 1.35.3 e helm 4.1.4; reproduzido com um List so de
+ConfigMap) e o cache de cluster do Argo CD v3.5.5. Referencia: https://github.com/kubernetes-sigs/metrics-server/issues/1868
+Correcao: metrics-server v0.8.1-eksbuild.21 (o EKS oferece v0.7.2, v0.8.0, v0.8.1 e v0.9.0 para a 1.36).
+
+== Validacoes ==
+/health, /connect (ECS) e /eks, /eks/health, /eks/connect (EKS) -> 200 pelo API Gateway.
+/eks/connect: PostgreSQL 16.13, usuario app_connect por IAM (Pod Identity), sem segredo no cluster.
+/eks servido pelo EKS: request_id cd794f41-05ef-4cc4-ad5d-36e60290f3b0 encontrado no log do pod.
+Argo CD self-heal: PDB alterado a mao (minAvailable 1 -> 0) voltou a 1 em ~2 s; app Synced/Healthy.
+Argo CD GitOps: commits a68b016 (readiness gate) e 5ec63ff/a97f56b (preStop, cross-zone) aplicados pela main sem acao manual
+(alem do pedido de refresh).
+HPA (carga de 40 lacos wget em /health de dentro do cluster, 5 min):
+  +16s cpu 0%/60% replicas 1 | +37s 82%/60% 1 (pod 2 subindo) | +56s 82%/60% 2 | +96s 62% 2 | +115s..+310s 42-45% 2
+
+== Rolling restart com trafego (4 requisicoes paralelas a /eks/health pelo API Gateway, timeout 5 s) ==
+Lotes de 4 esperam o mais lento, entao cada falha (5 s) segura o lote: a taxa DENTRO da janela de falha e bem maior que a
+taxa no total.
+Sem readiness gate, cross-zone desligado, preStop 8 s ............ 8 falhas em 118   (rollout 13 s)
+Com readiness gate, restart 1 .................................... 14 em 126           (rollout 40 s)
+Com readiness gate, restart 2 .................................... 10 em 158
+Com readiness gate, linha do tempo ............................... 22 em 384; falhas de +47 a +112 s, pod antigo sumiu em +49 s
+Readiness gate + preStop 90 s .................................... 35 em 676; falhas de +52 a +154 s, COM o pod antigo vivo
+                                                                    (encerramento em +49 s, sumiu em +133 s)
+  NLB nesse momento: load_balancing.cross_zone.enabled=false; alvo antigo 10.100.1.47 us-east-1a "draining",
+  novo 10.100.2.94 us-east-1b "healthy". Conclusao: o no do NLB na AZ antiga fica sem alvo.
+Readiness gate + cross-zone ligado, preStop 8 s, troca 1a -> 1b ... 0 falhas em 596
+Readiness gate + cross-zone ligado, preStop 8 s, troca 1b -> 1a ... 1 falha em 788 (residuo nao investigado)
+
+== RDS db.t4g.micro com os dois clientes IAM (ECS e EKS), 18:57 a 21:42, CloudWatch 15 min ==
+FreeableMemory 49 a 67 MiB | SwapUsage 173 a 190 MiB | CPU 4,5 a 7,2% | DatabaseConnections max 1
+(Janela 2, so ECS com IAM: memoria livre 52 a 68 MiB, swap 134 a 201 MiB.)
+
+== Conferencia apos o destroy (22:17) ==
+tools/residual-check.sh: exit 1 so por 10 regras de SG listadas no indice de tags; todas InvalidSecurityGroupRuleId.NotFound
+na API EC2. Sem cluster EKS, NLB, target group, SG do controller, ENI de EKS/ELB, instancia EC2, rota /eks, tag de subnet,
+VPC nao-default ou SG do projeto. Ficam: task definitions ACTIVE (sem custo) e o bootstrap (inclui a role gha-eks-lab).
