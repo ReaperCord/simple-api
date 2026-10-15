@@ -4,12 +4,12 @@ output "provider_arn" {
 }
 
 output "role_arns" {
-  description = "ARN de cada role do pipeline, por nome (gha-plan, gha-deploy, gha-infra, gha-eks-lab)"
+  description = "ARN de cada role do pipeline, por nome (gha-plan, gha-deploy, gha-infra, gha-infra-plan, gha-eks-lab)"
   value       = { for k, m in module.role : k => m.role_arn }
 }
 
 output "role_names" {
-  description = "Nomes das roles do pipeline (gha-plan, gha-deploy, gha-infra, gha-eks-lab)"
+  description = "Nomes das roles do pipeline (gha-plan, gha-deploy, gha-infra, gha-infra-plan, gha-eks-lab)"
   value       = keys(local.role_subjects)
 }
 

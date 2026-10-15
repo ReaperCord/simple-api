@@ -67,7 +67,7 @@ O `terraform plan` não roda nesta validação: os data sources (`aws_availabili
 
 1. **Bootstrap** (uma vez, state local; o `terraform.tfstate` é sensível e nunca é versionado):
    copie `bootstrap/terraform.tfvars.example` para `bootstrap/secrets.tfvars` (ignorado pelo git), troque `<GITHUB_OWNER>` e `<EMAIL>` e rode `init`, `plan -var-file=secrets.tfvars` e, com aprovação explícita, `apply`. Cria o bucket de state, o ECR, o budget e o OIDC com `gha-plan`, `gha-deploy` e `gha-infra`.
-2. **GitHub**: crie os environments `deploy` e `infra` (só a branch `main`; aprovação obrigatória no `infra`) e as variáveis do repositório com as saídas do bootstrap: `AWS_PLAN_ROLE_ARN`, `AWS_DEPLOY_ROLE_ARN`, `AWS_INFRA_ROLE_ARN`, `TF_STATE_BUCKET`, `TF_STATE_KEY` e `AWS_REGION`.
+2. **GitHub**: crie os environments `deploy`, `infra`, `infra-plan` e `eks-lab` (todos só com a branch `main`; aprovação obrigatória só no `infra`) e os valores com as saídas do bootstrap: no repositório `AWS_PLAN_ROLE_ARN`, `AWS_DEPLOY_ROLE_ARN`, `AWS_INFRA_ROLE_ARN`, `AWS_EKS_LAB_ROLE_ARN`, `TF_STATE_BUCKET`, `TF_STATE_KEY` e `AWS_REGION`; no environment `infra-plan`, o secret `AWS_INFRA_PLAN_ROLE_ARN` (saída `gha_infra_plan_role_arn`). Grave secrets por stdin (`terraform output -raw ... | gh secret set NOME`): `--body -` grava o literal `-`.
 3. **Primeira imagem**: `deploy.yml` com `only_build=true` publica a imagem (tag = SHA do commit) no ECR. Sem ela a task não sobe.
 4. **Stack**: `infra.yml` (ou, localmente com perfil de escrita ativado pelo Leandro) roda
    `terraform init -backend-config="bucket=<TF_STATE_BUCKET>" -backend-config="key=<TF_STATE_KEY>" -backend-config="region=<AWS_REGION>"` e depois `plan`/`apply` com `-var-file=environments/dev.tfvars -var image_tag=<sha>`.

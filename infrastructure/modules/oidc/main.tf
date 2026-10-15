@@ -10,6 +10,8 @@ locals {
   # environment proprio do GitHub, entao um nao consegue assumir a role do outro.
   # gha-eks-lab: roda so o root infrastructure/eks-lab no environment eks-lab (sem aprovacao; o destroy agendado por TTL
   # precisa rodar sozinho). Ver o fim deste arquivo.
+  # gha-infra-plan: job `plan` do infra.yml, no environment infra-plan (sem aprovacao, so a main). Mesmas leituras da
+  # gha-plan, mais a gravacao do plano em plans/ no bucket de state. Role separada da gha-plan porque esta roda HCL de PR.
   #
   # Dois formatos de sub por role (lista fechada, sem curinga):
   #  - por NOME: repo:OWNER/REPO:<contexto>            (repos criados ate 15/07/2026)
@@ -19,10 +21,11 @@ locals {
   github_sub_prefix_name      = "repo:${var.github_owner}/${var.github_repo}"
   github_sub_prefix_immutable = "repo:${var.github_owner}@${var.github_owner_id}/${var.github_repo}@${var.github_repo_id}"
   role_contexts = {
-    "gha-plan"    = "pull_request"
-    "gha-deploy"  = "environment:deploy"
-    "gha-infra"   = "environment:infra"
-    "gha-eks-lab" = "environment:eks-lab"
+    "gha-plan"       = "pull_request"
+    "gha-deploy"     = "environment:deploy"
+    "gha-infra"      = "environment:infra"
+    "gha-infra-plan" = "environment:infra-plan"
+    "gha-eks-lab"    = "environment:eks-lab"
   }
   role_subjects = {
     for role, ctx in local.role_contexts : role => [
@@ -54,16 +57,19 @@ locals {
   }
 
   role_policies = {
-    "gha-plan"    = data.aws_iam_policy_document.plan.json
-    "gha-deploy"  = data.aws_iam_policy_document.deploy.json
-    "gha-infra"   = data.aws_iam_policy_document.infra.json
-    "gha-eks-lab" = data.aws_iam_policy_document.eks_lab.json
+    "gha-plan"       = data.aws_iam_policy_document.plan.json
+    "gha-deploy"     = data.aws_iam_policy_document.deploy.json
+    "gha-infra"      = data.aws_iam_policy_document.infra.json
+    "gha-infra-plan" = data.aws_iam_policy_document.infra_plan.json
+    "gha-eks-lab"    = data.aws_iam_policy_document.eks_lab.json
   }
 
   # ARNs construidos (sem account ID ou regiao literal).
   state_bucket_arn = "arn:${local.partition}:s3:::${var.state_bucket_name}"
   state_object_arn = "${local.state_bucket_arn}/${var.state_key}"
   state_lock_arn   = "${local.state_bucket_arn}/${var.state_key}.tflock"
+  # Planos salvos do infra.yml (job plan grava, job apply le). O bucket expira o prefixo em 7 dias (bootstrap).
+  plan_files_arn = "${local.state_bucket_arn}/plans/*"
 
   ecs_service_arn    = "arn:${local.partition}:ecs:${var.region}:${local.account_id}:service/${var.ecs_cluster_name}/${var.ecs_service_name}"
   task_role_arns     = [for n in var.task_role_names : "arn:${local.partition}:iam::${local.account_id}:role/${n}"]
@@ -181,6 +187,21 @@ data "aws_iam_policy_document" "plan" {
       "s3:DeleteObject", # libera o lock ao fim do plan
     ]
     resources = [local.state_lock_arn]
+  }
+}
+
+# ---------------------------------------------------------------------------------------------
+# gha-infra-plan: job `plan` do infra.yml. As leituras da gha-plan (ja exercitadas pelo plan do CI com a stack no ar)
+# e a gravacao do plano salvo. Nao escreve em nenhum recurso da stack nem no state.
+# ---------------------------------------------------------------------------------------------
+data "aws_iam_policy_document" "infra_plan" {
+  source_policy_documents = [data.aws_iam_policy_document.plan.json]
+
+  statement {
+    sid       = "SavePlanFile"
+    effect    = "Allow"
+    actions   = ["s3:PutObject"] # grava plans/<run>/tfplan para o job apply (que confere o SHA-256 antes de aplicar)
+    resources = [local.plan_files_arn]
   }
 }
 
@@ -665,6 +686,13 @@ data "aws_iam_policy_document" "infra_iam_state" {
       "s3:DeleteObject", # libera o lock
     ]
     resources = [local.state_lock_arn]
+  }
+
+  statement {
+    sid       = "ReadPlanFile"
+    effect    = "Allow"
+    actions   = ["s3:GetObject"] # baixa o plano salvo pelo job plan (gha-infra-plan); so leitura
+    resources = [local.plan_files_arn]
   }
 }
 
