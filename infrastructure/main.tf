@@ -38,6 +38,9 @@ locals {
   public_route_table_index = { for i, n in var.public_subnet_names : n => i }
 
   # VPC, SGs e RDS pertencem a camada compartilhada (usada tambem pelo lab EKS).
+  # Taxonomia de rotulos (Grupo > Subgrupo > Componente): Project (default_tags) > Track (default_tags ou shared) >
+  # Component (em cada modulo/recurso abaixo). As mesmas chaves vao nos labels do Kubernetes (k8s/) e nas tags do NLB.
+  # Serve para filtrar falhas por componente e separar custo (tags de alocacao de custo no Billing).
   shared_tags = { Track = "shared" }
 
   # Regras de SG: JSON lido com jsondecode(file()), nunca templatefile (04-terraform.md, regra 9).
@@ -68,7 +71,7 @@ module "vpc" {
   source = "./modules/network/vpc"
 
   vpc_cidr_block = var.vpc_cidr_block
-  tags           = merge(var.tags_vpc, local.shared_tags)
+  tags           = merge(merge(var.tags_vpc, local.shared_tags), { Component = "network" })
 }
 
 module "public_subnets" {
@@ -79,7 +82,7 @@ module "public_subnets" {
   subnet_cidr             = var.subnet_cidr_blocks_public
   availability_zone       = local.azs
   map_public_ip_on_launch = true
-  tags                    = var.tags_public_subnet
+  tags                    = merge(var.tags_public_subnet, { Component = "network" })
 }
 
 module "private_subnets" {
@@ -90,14 +93,14 @@ module "private_subnets" {
   subnet_cidr             = var.subnet_cidr_blocks_private
   availability_zone       = local.azs
   map_public_ip_on_launch = false
-  tags                    = var.tags_private_subnet
+  tags                    = merge(var.tags_private_subnet, { Component = "network" })
 }
 
 module "igw" {
   source = "./modules/network/internet-gateway"
 
   vpc_id = module.vpc.vpc_id
-  tags   = var.tags_internet_gateway
+  tags   = merge(var.tags_internet_gateway, { Component = "network" })
 }
 
 module "public_route_tables" {
@@ -105,7 +108,7 @@ module "public_route_tables" {
 
   vpc_id     = module.vpc.vpc_id
   subnet_ids = module.public_subnets.subnet_ids_ordered
-  tags       = var.tags_rt_public
+  tags       = merge(var.tags_rt_public, { Component = "network" })
 }
 
 # Uma instancia do modulo route por route table publica (rota default via IGW).
@@ -131,7 +134,7 @@ module "private_route_tables" {
 
   vpc_id     = module.vpc.vpc_id
   subnet_ids = module.private_subnets.subnet_ids_ordered
-  tags       = var.tags_rt_private
+  tags       = merge(var.tags_rt_private, { Component = "network" })
 }
 
 module "private_route_table_associations" {
@@ -150,7 +153,7 @@ module "sg_vpclink" {
   name          = "${local.name}-vpclink"
   description   = "VPC Link do API Gateway: saida para as tasks ECS"
   vpc_id        = module.vpc.vpc_id
-  tags          = merge({ Name = "${local.name}-vpclink" }, local.shared_tags)
+  tags          = merge(merge({ Name = "${local.name}-vpclink" }, local.shared_tags), { Component = "api-gateway" })
   sg_ids        = local.sg_ids
   ingress_rules = local.rules_vpclink.ingress
   egress_rules  = local.rules_vpclink.egress
@@ -162,7 +165,7 @@ module "sg_ecs" {
   name          = "${local.name}-ecs"
   description   = "Tasks ECS: entrada so do VPC Link, saida para RDS e AWS"
   vpc_id        = module.vpc.vpc_id
-  tags          = merge({ Name = "${local.name}-ecs" }, local.shared_tags)
+  tags          = merge(merge({ Name = "${local.name}-ecs" }, local.shared_tags), { Component = "api" })
   sg_ids        = local.sg_ids
   ingress_rules = local.rules_ecs.ingress
   egress_rules  = local.rules_ecs.egress
@@ -174,7 +177,7 @@ module "sg_rds" {
   name          = "${local.name}-rds"
   description   = "RDS PostgreSQL: entrada so das tasks ECS"
   vpc_id        = module.vpc.vpc_id
-  tags          = merge({ Name = "${local.name}-rds" }, local.shared_tags)
+  tags          = merge(merge({ Name = "${local.name}-rds" }, local.shared_tags), { Component = "database" })
   sg_ids        = local.sg_ids
   ingress_rules = local.rules_rds.ingress
   egress_rules  = local.rules_rds.egress
@@ -201,7 +204,7 @@ module "rds" {
 
   iam_database_authentication_enabled = var.db_iam_auth
 
-  tags = merge({ Name = "${local.name}-db" }, local.shared_tags)
+  tags = merge(merge({ Name = "${local.name}-db" }, local.shared_tags), { Component = "database" })
 }
 
 #==========================================================================
@@ -215,6 +218,7 @@ module "cloudmap" {
   service_name   = "api"
   # O deregister das tasks pelo ECS e assincrono: sem isso o destroy pode falhar com o servico ainda "em uso".
   force_destroy = true
+  tags          = { Component = "service-discovery" }
 }
 
 #==========================================================================
@@ -317,6 +321,7 @@ module "execution_role" {
   role_name               = local.execution_role_name
   assume_role_policy_json = data.aws_iam_policy_document.ecs_tasks_assume.json
   policy_json             = data.aws_iam_policy_document.execution.json
+  tags                    = { Component = "iam" }
 }
 
 module "task_role" {
@@ -325,6 +330,7 @@ module "task_role" {
   role_name               = local.task_role_name
   assume_role_policy_json = data.aws_iam_policy_document.ecs_tasks_assume.json
   policy_json             = data.aws_iam_policy_document.task.json
+  tags                    = { Component = "iam" }
 }
 
 module "dbinit_role" {
@@ -334,6 +340,7 @@ module "dbinit_role" {
   role_name               = "${local.name}-dbinit"
   assume_role_policy_json = data.aws_iam_policy_document.ecs_tasks_assume.json
   policy_json             = data.aws_iam_policy_document.dbinit[0].json
+  tags                    = { Component = "iam" }
 }
 
 #==========================================================================
@@ -379,6 +386,7 @@ module "ecs" {
       { name = "DB_SECRET_ARN", value = module.rds.master_user_secret_arn },
     ],
   )
+  tags = { Component = "api" }
 }
 
 # Revisao unica do db-init (mesma imagem da app, comando trocado). Rodada com tools/run-db-init.sh.
@@ -431,6 +439,7 @@ resource "aws_ecs_task_definition" "dbinit" {
 
   # O log group nasce no modulo ecs; a task so roda depois do apply, mas a dependencia deixa explicito.
   depends_on = [module.ecs]
+  tags       = { Component = "database" }
 }
 
 #==========================================================================
@@ -445,6 +454,7 @@ module "apigw" {
   integration_uri             = module.cloudmap.service_arn
   throttling_rate_limit       = var.api_throttling_rate_limit
   throttling_burst_limit      = var.api_throttling_burst_limit
+  tags                        = { Component = "api-gateway" }
 }
 
 #==========================================================================
@@ -457,6 +467,7 @@ module "autoscaling" {
   service_name = module.ecs.service_name
   min_capacity = var.autoscaling_min_capacity
   max_capacity = var.autoscaling_max_capacity
+  tags         = { Component = "api" }
 }
 
 #==========================================================================
@@ -476,6 +487,7 @@ resource "aws_cloudwatch_metric_alarm" "rds_cpu_credit_balance" {
   treat_missing_data  = "notBreaching"
   alarm_actions       = var.alarm_action_arns
   ok_actions          = var.alarm_action_arns
+  tags                = { Component = "database" }
 }
 
 resource "aws_cloudwatch_metric_alarm" "rds_free_storage" {
@@ -492,6 +504,7 @@ resource "aws_cloudwatch_metric_alarm" "rds_free_storage" {
   treat_missing_data  = "notBreaching"
   alarm_actions       = var.alarm_action_arns
   ok_actions          = var.alarm_action_arns
+  tags                = { Component = "database" }
 }
 
 # Metrica de HTTP API: nome "5xx" e dimensoes ApiId + Stage
@@ -510,4 +523,5 @@ resource "aws_cloudwatch_metric_alarm" "api_5xx" {
   treat_missing_data  = "notBreaching"
   alarm_actions       = var.alarm_action_arns
   ok_actions          = var.alarm_action_arns
+  tags                = { Component = "api-gateway" }
 }

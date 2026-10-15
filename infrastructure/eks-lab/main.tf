@@ -65,6 +65,7 @@ data "aws_iam_policy_document" "node_assume" {
 resource "aws_iam_role" "cluster" {
   name               = "${local.name}-cluster"
   assume_role_policy = data.aws_iam_policy_document.eks_assume.json
+  tags               = { Component = "iam" }
 }
 
 resource "aws_iam_role_policy_attachment" "cluster" {
@@ -75,6 +76,7 @@ resource "aws_iam_role_policy_attachment" "cluster" {
 resource "aws_iam_role" "node" {
   name               = "${local.name}-node"
   assume_role_policy = data.aws_iam_policy_document.node_assume.json
+  tags               = { Component = "iam" }
 }
 
 resource "aws_iam_role_policy_attachment" "node" {
@@ -118,7 +120,7 @@ resource "aws_eks_cluster" "this" {
 
   depends_on = [aws_iam_role_policy_attachment.cluster]
 
-  tags = { Name = local.name }
+  tags = merge({ Name = local.name }, { Component = "eks-control-plane" })
 }
 
 resource "aws_eks_access_entry" "admin" {
@@ -127,6 +129,7 @@ resource "aws_eks_access_entry" "admin" {
   cluster_name  = aws_eks_cluster.this.name
   principal_arn = each.value
   type          = "STANDARD"
+  tags          = { Component = "iam" }
 }
 
 resource "aws_eks_access_policy_association" "admin" {
@@ -153,6 +156,7 @@ resource "aws_eks_addon" "vpc_cni" {
   addon_version               = var.addon_versions["vpc-cni"]
   resolve_conflicts_on_create = "OVERWRITE"
   resolve_conflicts_on_update = "OVERWRITE"
+  tags                        = { Component = "eks-addons" }
 }
 
 resource "aws_eks_addon" "kube_proxy" {
@@ -161,6 +165,7 @@ resource "aws_eks_addon" "kube_proxy" {
   addon_version               = var.addon_versions["kube-proxy"]
   resolve_conflicts_on_create = "OVERWRITE"
   resolve_conflicts_on_update = "OVERWRITE"
+  tags                        = { Component = "eks-addons" }
 }
 
 resource "aws_eks_node_group" "this" {
@@ -189,7 +194,7 @@ resource "aws_eks_node_group" "this" {
     aws_eks_addon.kube_proxy,
   ]
 
-  tags = { Name = "${local.name}-ng" }
+  tags = merge({ Name = "${local.name}-ng" }, { Component = "eks-nodes" })
 }
 
 resource "aws_eks_addon" "coredns" {
@@ -200,6 +205,7 @@ resource "aws_eks_addon" "coredns" {
   resolve_conflicts_on_update = "OVERWRITE"
 
   depends_on = [aws_eks_node_group.this]
+  tags       = { Component = "eks-addons" }
 }
 
 resource "aws_eks_addon" "pod_identity_agent" {
@@ -210,6 +216,7 @@ resource "aws_eks_addon" "pod_identity_agent" {
   resolve_conflicts_on_update = "OVERWRITE"
 
   depends_on = [aws_eks_node_group.this]
+  tags       = { Component = "eks-addons" }
 }
 
 resource "aws_eks_addon" "metrics_server" {
@@ -220,6 +227,7 @@ resource "aws_eks_addon" "metrics_server" {
   resolve_conflicts_on_update = "OVERWRITE"
 
   depends_on = [aws_eks_node_group.this]
+  tags       = { Component = "eks-addons" }
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -247,6 +255,7 @@ module "lbc_role" {
   role_name               = "${local.name}-lbc"
   assume_role_policy_json = data.aws_iam_policy_document.pods_assume.json
   policy_json             = file("${path.module}/../config/policies/alb_controller_policy.json")
+  tags                    = { Component = "iam" }
 }
 
 resource "aws_eks_pod_identity_association" "lbc" {
@@ -256,6 +265,7 @@ resource "aws_eks_pod_identity_association" "lbc" {
   role_arn        = module.lbc_role.role_arn
 
   depends_on = [aws_eks_addon.pod_identity_agent]
+  tags       = { Component = "iam" }
 }
 
 data "aws_iam_policy_document" "app" {
@@ -273,6 +283,7 @@ module "app_role" {
   role_name               = "${local.name}-app"
   assume_role_policy_json = data.aws_iam_policy_document.pods_assume.json
   policy_json             = data.aws_iam_policy_document.app.json
+  tags                    = { Component = "iam" }
 }
 
 resource "aws_eks_pod_identity_association" "app" {
@@ -282,6 +293,7 @@ resource "aws_eks_pod_identity_association" "app" {
   role_arn        = module.app_role.role_arn
 
   depends_on = [aws_eks_addon.pod_identity_agent]
+  tags       = { Component = "iam" }
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -294,6 +306,7 @@ resource "aws_vpc_security_group_ingress_rule" "rds_from_eks" {
   to_port                      = 5432
   ip_protocol                  = "tcp"
   description                  = "EKS lab (temporario): pods e nos ate o RDS"
+  tags                         = { Component = "database" }
 }
 
 # O NLB (alvos por IP) e os health checks chegam aos pods na porta da app, vindos da propria VPC.
@@ -304,6 +317,7 @@ resource "aws_vpc_security_group_ingress_rule" "pods_from_vpc" {
   to_port           = 3000
   ip_protocol       = "tcp"
   description       = "EKS lab (temporario): NLB interno e VPC Link ate os pods na porta da app"
+  tags              = { Component = "network" }
 }
 
 # O AWS Load Balancer Controller escolhe as subnets do NLB INTERNO pela tag abaixo; so as privadas a recebem.

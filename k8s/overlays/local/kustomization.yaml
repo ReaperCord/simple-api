@@ -5,6 +5,14 @@ kind: Kustomization
 resources:
   - ../../base
   - postgres.yaml
+# Mesma taxonomia do overlay eks (project > track > component); track=local identifica o laboratorio no kind.
+labels:
+  - pairs:
+      project: simple-api
+      track: local
+      component: api
+    includeSelectors: false
+    includeTemplates: true
 images:
   - name: simple-api
     newName: simple-api

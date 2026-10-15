@@ -20,6 +20,7 @@ locals {
 resource "aws_s3_bucket" "state" {
   bucket        = local.state_bucket_name
   force_destroy = false
+  tags          = { Component = "terraform-state" }
 }
 
 resource "aws_s3_bucket_versioning" "state" {
@@ -86,6 +87,7 @@ module "ecr" {
 
   repository_name = local.ecr_repository_name
   max_image_count = var.ecr_max_image_count
+  tags            = { Component = "registry" }
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -97,6 +99,7 @@ module "budget" {
   name                       = "${var.project_name}-monthly"
   limit_amount               = var.budget_limit_amount
   subscriber_email_addresses = var.budget_emails
+  tags                       = { Component = "finops" }
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -118,6 +121,7 @@ module "oidc" {
   ecs_cluster_name   = local.name
   ecs_service_name   = local.name
   task_role_names    = ["${local.name}-ecs-exec", "${local.name}-ecs-task"]
+  tags               = { Component = "ci-cd" }
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -142,4 +146,5 @@ resource "aws_resourcegroups_group" "project" {
       ]
     })
   }
+  tags = { Component = "finops" }
 }

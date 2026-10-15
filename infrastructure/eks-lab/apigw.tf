@@ -28,6 +28,7 @@ resource "aws_vpc_security_group_egress_rule" "vpclink_to_nlb" {
   to_port           = var.nlb_listener_port
   ip_protocol       = "tcp"
   description       = "EKS lab (temporario): VPC Link ate o NLB interno"
+  tags              = { Component = "api-gateway" }
 }
 
 resource "aws_apigatewayv2_integration" "eks_proxy" {
