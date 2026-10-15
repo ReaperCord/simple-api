@@ -55,9 +55,12 @@ Riscos residuais conhecidos:
   - `action=plan` (run 38669868242): 54 a criar, não destrutivo; `apply` pulado.
   - `action=destroy` com o state vazio (run 38669878847): sem mudanças; `apply` pulado, sem pedir gate.
   - `action=apply` (run 38670814968): o plano foi guardado no bucket. Conferido à parte: 62.107 bytes, AES256, SHA-256 `3dfc8431…` calculado sobre o arquivo baixado. A comparação com o hash do resumo do run é visual (a API não expõe o resumo do job). O `apply` ficou no gate, e o gate foi **rejeitado**: nenhum passo rodou e nada foi criado.
-- **Ainda não exercitado no GitHub:**
-  - o download, a conferência do hash e o apply do job `apply`, que ficam para o próximo apply real;
-  - o bloqueio por `confirm_destructive`, que precisa de state com recursos. Foi validado localmente com um plano destrutivo real (`terraform_data`, 1 replace e 1 delete) e por 9 testes no CI.
+- **De ponta a ponta, com a stack real (14/10/2026, 23:38 a 23:57 de Brasília):**
+  - `apply` (run 38671972944): o gate foi aprovado depois da leitura do plano; `tfplan: OK` na conferência do SHA-256; 54 added. `/` e `/health` deram 200.
+  - `destroy` **sem** `confirm_destructive` (run 38672844206): o `plan-guard` classificou `delete=54`, `destructive=true`; o run falhou no job `plan`, o `apply` foi pulado e **nenhum gate foi pedido**.
+  - `destroy` com `confirm_destructive=dev` (run 38672955141): o gate foi aprovado; `tfplan: OK`; 54 destroyed.
+  - `residual-check`: exit 1 só pelo índice de tags. As 9 regras de SG, as subnets e o snapshot automático listados já não existem na API (`NotFound` ou lista vazia).
+  - Nenhum account id nos logs desses runs: os dois números de 12 dígitos encontrados eram IDs de rota (`r-rtb-…`).
 - A confirmação destrutiva é um texto fixo (`dev`). Ela evita o clique automático, mas não substitui ler a lista.
 - A role `gha-infra` cria roles e policies com o prefixo `simple-api-*`. O conteúdo das policies criadas é livre, o que permite escalada de privilégio dentro do prefixo, e as policies não foram validadas com o IAM Access Analyzer.
 - O `aquasecurity/trivy-action` roda no job que tem credenciais AWS temporárias da `gha-deploy`.
@@ -66,4 +69,4 @@ Riscos residuais conhecidos:
 
 ## Status
 
-Aceito. Implementado nos workflows `ci.yml`, `deploy.yml`, `infra.yml`, `eks-lab.yml` e no módulo `oidc`, e executado contra a AWS. O fluxo de dois jobs do `infra.yml` foi validado até o gate. O apply do plano revisado fica para a próxima janela de AWS.
+Aceito. Implementado nos workflows `ci.yml`, `deploy.yml`, `infra.yml`, `eks-lab.yml` e no módulo `oidc`, e executado contra a AWS. O fluxo de dois jobs do `infra.yml` foi validado de ponta a ponta: apply, bloqueio destrutivo e destroy confirmado.
