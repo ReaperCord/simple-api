@@ -5,8 +5,11 @@
 # Stage 1: bundle de CAs da RDS (necessario para DB_SSLMODE=verify-full).
 # SHA-256 medido em 2026-10-12 (TOFU): a AWS nao publica checksum do bundle.
 # Se a AWS atualizar o arquivo, este build falha de proposito: conferir a mudanca e atualizar o hash em PR.
+# 2026-10-14: hash atualizado (fe45bbeb... -> 90a6f1a7...). Conferido certificado a certificado contra o bundle da
+# imagem anterior: 111 -> 114, entraram so as 3 raizes da regiao sa-west-1 (RSA2048 G1, RSA4096 G1, ECC384 G1),
+# nenhuma saiu.
 FROM scratch AS rds-ca
-ADD --checksum=sha256:fe45bbebf92ad3e27a583bbb2ddd1553c521ed4d49af5514dc0a40372ea5395c \
+ADD --checksum=sha256:90a6f1a7978a1b1b096dca6c57511ca48d3b8cf052f8e704baf358f34ea2f21b \
     https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem /rds-global-bundle.pem
 
 # Stage 2: dependencias de producao
